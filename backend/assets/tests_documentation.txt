@@ -1,0 +1,126 @@
+
+Parking Simulation Test Documentation
+=====================================
+
+This document describes the test scenarios currently implemented for the parking lot simulation.
+There are two main test suites:
+1. `tests/test_simulation_scenarios.py`: Standard scenarios to verify core functionality.
+2. `tests/test_advanced_scenarios.py`: Complex scenarios to stress test congestion and saturation.
+
+-------------------------------------------------------------------------------
+1. Standard Scenarios (tests/test_simulation_scenarios.py)
+-------------------------------------------------------------------------------
+Grid Size: 20x10 (Default)
+
+Scenario: pure_evacuate
+-----------------------
+Description: Tests the ability of cars to exit the lot without new arrivals or parked cars blocking them.
+Configuration:
+  - Rules: 2 Entries, 2 Exits, 55 Parking Spots
+  - Simulation:
+    - Initial Active Cars: 10 (Intent: EXIT)
+    - Initial Parked Cars: 0
+    - New Arrivals: 0 (Lambda: 0.0)
+Expected Output:
+  - All 10 active cars successfully plan paths and exit the simulation.
+  - Final time should be relatively short (around 15-20 steps).
+  - No collisions or deadlocks.
+  - SUCCESS: All 10 initial active cars successfully exit the parking lot.
+
+Scenario: parking_only
+----------------------
+Description: Tests the arrival and parking logic for a stream of incoming cars.
+Configuration:
+  - Rules: 2 Entries, 2 Exits, 55 Parking Spots
+  - Simulation:
+    - Initial Active Cars: 0
+    - Initial Parked Cars: 0
+    - New Arrivals: 20 (Lambda: 0.3, Max: 20)
+Expected Output:
+  - 20 cars arrive sequentially, find parking spots, and park.
+  - Total parked count reaches 20.
+  - No failures in planning.
+  - SUCCESS: All 20 arriving cars successfully find and reach a parking spot.
+
+Scenario: mixed_load
+--------------------
+Description: A balanced scenario with existing parked cars, active cars trying to exit, and new cars arriving.
+Configuration:
+  - Rules: 2 Entries, 2 Exits, 55 Parking Spots
+  - Simulation:
+    - Initial Active Cars: 10 (Intent: EXIT)
+    - Initial Parked Cars: 10 (Static obstacles)
+    - New Arrivals: 20 (Lambda: 0.2, Max: 20)
+Expected Output:
+  - Initial active cars exit while new cars enter and park.
+  - The simulation handles bidirectional traffic.
+  - Total arrived: 30 (10 initial + 20 new).
+  - Total parked ends at roughly 30 (10 initial + 20 new).
+  - SUCCESS: All 10 initial active cars successfully exit, and all 20 arriving cars successfully find parking spots.
+
+Scenario: stress_evacuate
+-------------------------
+Description: A higher density evacuation to test exit congestion management.
+Configuration:
+  - Rules: 2 Entries, 2 Exits, 55 Parking Spots
+  - Simulation:
+    - Initial Active Cars: 15 (Intent: EXIT)
+    - Initial Parked Cars: 0
+    - New Arrivals: 0 (Lambda: 0.0)
+    - Planning Horizon: 50 (Shorter horizon forces efficient planning)
+Expected Output:
+  - All 15 cars exit successfully.
+  - Cars may queue at exits but must not deadlock.
+  - SUCCESS: All 15 initial active cars successfully exit the parking lot.
+
+-------------------------------------------------------------------------------
+2. Advanced Scenarios (tests/test_advanced_scenarios.py)
+-------------------------------------------------------------------------------
+
+Scenario: small_grid_congestion
+-------------------------------
+Description: A tiny grid with high traffic density to force constant interaction and replanning.
+Grid Size: 10x10
+Configuration:
+  - Rules: 1 Entry, 1 Exit, 10 Parking Spots
+  - Simulation:
+    - Initial Active Cars: 0
+    - Initial Parked Cars: 2
+    - New Arrivals: 8 (Lambda: 0.5, Max: 8)
+Expected Output:
+  - The lot fills up quickly (2+8 = 10 spots).
+  - Cars must navigate tight spaces without deadlocking.
+  - Total parked reaches 10.
+  - SUCCESS: All 8 arriving cars successfully find parking spots (Total parked: 10).
+
+Scenario: high_density_saturation
+---------------------------------
+Description: Tests navigation when the lot is nearly full of static obstacles.
+Grid Size: 20x10
+Configuration:
+  - Rules: 2 Entries, 2 Exits, 50 Parking Spots
+  - Simulation:
+    - Initial Active Cars: 5
+    - Initial Parked Cars: 30 (~60% full)
+    - New Arrivals: 15 (Lambda: 0.4, Max: 15)
+Expected Output:
+  - Agents must successfully plan around many static obstacles.
+  - Total cars (30+5+15 = 50) matches total spots.
+  - Simulation completes with all cars parked.
+  - SUCCESS: All 5 initial active cars exit, and all 15 arriving cars find parking spots.
+
+Scenario: long_duration_stress
+------------------------------
+Description: A larger grid with sustained traffic over a longer period to check for stability.
+Grid Size: 25x15
+Configuration:
+  - Rules: 3 Entries, 3 Exits, 80 Parking Spots
+  - Simulation:
+    - Initial Active Cars: 10
+    - Initial Parked Cars: 10
+    - New Arrivals: 60 (Lambda: 0.3, Max: 60)
+Expected Output:
+  - Simulation runs for a longer time (~200+ steps).
+  - Large number of cars (80 total) interact successfully.
+  - No "TimeoutError" or infinite loops.
+  - SUCCESS: All 10 initial active cars exit, and all 60 arriving cars find parking spots.
