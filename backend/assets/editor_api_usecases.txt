@@ -1,0 +1,309 @@
+Parking Lot Editor API – Frontend ↔ Backend Examples
+
+Base URL
+- Local dev: http://localhost:8000
+- Router prefix: /editor
+
+Notes
+- The backend owns the draft state (server-owned drafts).
+- The frontend sends edit actions; backend validates and applies them.
+- For realtime feedback, the frontend typically calls actions:apply.
+- For a dry-run validation (no mutation), set dryRun=true.
+
+========================================
+USE CASE 1: User starts a new blank editor session
+========================================
+Goal
+- User opens the editor screen and wants a blank grid with WALL boundary.
+
+Request
+POST /editor/drafts
+Content-Type: application/json
+
+{
+  "source": "blank",
+  "width": 20,
+  "height": 10
+}
+
+Response (200)
+{
+  "draftId": "b9b4c5c9-8b78-4e72-8c4a-7b3f2a0a6b0d",
+  "grid": {
+    "width": 20,
+    "height": 10,
+    "cells": [
+      {"x":0,"y":0,"type":"WALL","metadata":{}},
+      {"x":1,"y":0,"type":"WALL","metadata":{}},
+      "... many cells ..."
+    ]
+  }
+}
+
+Frontend state update
+- Store draftId for future requests.
+- Render grid from response.
+
+========================================
+USE CASE 2: User paints roads and walls (generic paint)
+========================================
+Goal
+- User clicks/drag-paints ROAD/WALL cells.
+
+Request
+POST /editor/drafts/{draftId}/actions:apply
+Content-Type: application/json
+
+{
+  "action": {
+    "type": "PAINT",
+    "x": 3,
+    "y": 4,
+    "cellType": "ROAD"
+  }
+}
+
+Response (200)
+{
+  "ok": true,
+  "grid": {
+    "width": 20,
+    "height": 10,
+    "cells": ["... updated grid ..."]
+  },
+  "error": null
+}
+
+========================================
+USE CASE 3: Realtime illegal placement feedback (EXIT in the middle)
+========================================
+Goal
+- User tries to place EXIT in an illegal location (not on boundary non-corner).
+- Frontend wants immediate error message.
+
+Request
+POST /editor/drafts/{draftId}/actions:apply
+Content-Type: application/json
+
+{
+  "action": {
+    "type": "PLACE_EXIT",
+    "x": 10,
+    "y": 5
+  }
+}
+
+Response (200)
+{
+  "ok": false,
+  "grid": null,
+  "error": {
+    "code": "INVALIDPLACEMENTERROR",
+    "message": "EXIT must be placed on a boundary cell (not a corner)",
+    "x": 10,
+    "y": 5
+  }
+}
+
+Frontend behavior
+- Show tooltip/toast near (10,5) with the message.
+- Do NOT update the local grid to EXIT, because backend rejected it.
+
+========================================
+USE CASE 4: Realtime dry-run (validate without mutating)
+========================================
+Goal
+- Frontend wants to preview if an action is legal before applying.
+
+Request
+POST /editor/drafts/{draftId}/actions:apply
+Content-Type: application/json
+
+{
+  "dryRun": true,
+  "action": {
+    "type": "PLACE_ENTRY",
+    "x": 5,
+    "y": 0
+  }
+}
+
+Response (200) – if it would succeed
+{
+  "ok": true,
+  "grid": {
+    "width": 20,
+    "height": 10,
+    "cells": ["... grid that would result ..."]
+  },
+  "error": null
+}
+
+Frontend behavior
+- If ok=true: you can either apply it for real, or just use it for UI preview.
+
+========================================
+USE CASE 5: User finishes editing and clicks “Validate”
+========================================
+Goal
+- Validate the whole grid (global constraints + connectivity) before saving.
+
+Request
+POST /editor/drafts/{draftId}:validate
+Content-Type: application/json
+
+{}
+
+Response (200) – valid grid
+{
+  "ok": true,
+  "errors": []
+}
+
+Response (200) – invalid grid
+{
+  "ok": false,
+  "errors": [
+    {
+      "code": "BASIC_CONSTRAINT",
+      "message": "Grid must contain at least one EXIT"
+    },
+    {
+      "code": "CONNECTIVITY",
+      "message": "EXIT at (3,0) is not reachable via roads"
+    }
+  ]
+}
+
+Frontend behavior
+- If ok=false: list errors in a panel.
+- Optionally, parse coordinates from the message and highlight cells.
+
+========================================
+USE CASE 6: User saves the parking lot (DB Persisted)
+========================================
+Goal
+- Validate and persist the grid to the global database.
+- Requires a unique name.
+
+Request
+POST /editor/drafts/{draftId}:save
+Content-Type: application/json
+
+{
+  "name": "Downtown Structure A"
+}
+
+Response (200) – saved successfully
+{
+  "ok": true,
+  "parkingLotId": "0aab2f5c-2e9a-4af3-8d6f-5a2d83d0f9b2",
+  "errors": []
+}
+
+Response (200) – name taken
+{
+  "ok": false,
+  "parkingLotId": null,
+  "errors": [
+    {"code": "NAME_TAKEN", "message": "Parking lot name already exists"}
+  ]
+}
+
+Response (200) – validation failed
+{
+  "ok": false,
+  "parkingLotId": null,
+  "errors": [
+    {"code": "CONNECTIVITY", "message": "No drivable cells found in grid"}
+  ]
+}
+
+========================================
+USE CASE 7: User lists all saved parking lots
+========================================
+Goal
+- Populate a dropdown/modal of "Premade Parking Lots" for simulation or editing.
+
+Request
+GET /editor/saved
+
+Response (200)
+{
+  "items": [
+    {
+      "id": "0aab2f5c-...",
+      "name": "Downtown Structure A",
+      "width": 20,
+      "height": 10,
+      "capacity": 50,
+      "num_entries": 2,
+      "num_exits": 2,
+      "preview_matrix": [
+        "####################",
+        "E..................#",
+        "#.PPPPPPPPPPPPPPPP.#",
+        "#..................#",
+        "#..................X",
+        "####################"
+      ]
+    },
+    {
+      "id": "1bbc...",
+      "name": "Small Test Lot",
+      "width": 10,
+      "height": 10,
+      "capacity": 15,
+      "num_entries": 1,
+      "num_exits": 1
+    }
+  ]
+}
+
+========================================
+USE CASE 8: User loads a previously saved parking lot into the editor
+========================================
+Goal
+- User selects a lot from the list (UseCase 7) and loads it into a new draft.
+
+Request
+POST /editor/drafts
+Content-Type: application/json
+
+{
+  "source": "load",
+  "parkingLotId": "0aab2f5c-2e9a-4af3-8d6f-5a2d83d0f9b2"
+}
+
+Response (200)
+{
+  "draftId": "5e3fbb3d-0e56-48d3-9b3e-2c2d3c1a33e7",
+  "grid": {
+    "width": 20,
+    "height": 10,
+    "cells": ["... loaded grid ..."]
+  }
+}
+
+========================================
+Common error cases
+========================================
+1) Draft not found
+- Example: GET /editor/drafts/{draftId}
+Response (404)
+{
+  "detail": {
+    "code": "DRAFT_NOT_FOUND",
+    "message": "Draft not found"
+  }
+}
+
+2) Unknown cellType string
+- Example: PAINT with cellType: "TREE"
+Response (422)
+{
+  "detail": {
+    "code": "INVALID_CELL_TYPE",
+    "message": "Unknown CellType 'TREE'"
+  }
+}

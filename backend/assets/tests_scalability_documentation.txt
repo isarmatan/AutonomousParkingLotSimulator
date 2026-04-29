@@ -1,0 +1,58 @@
+
+Parking Simulation Scalability Test Documentation
+=================================================
+
+This document describes the scalability and stress tests designed to verify the simulation's performance and stability under varied grid sizes and high vehicle counts (over 100 cars).
+Test Suite: `tests/test_scalability_scenarios.py`
+
+-------------------------------------------------------------------------------
+Scalability Scenarios
+-------------------------------------------------------------------------------
+
+Scenario: large_grid_sparse
+---------------------------
+Description: Tests pathfinding capabilities over a large area with relatively sparse traffic. This verifies that the A* algorithm scales well spatially.
+Grid Size: 50x30 (1500 cells)
+Configuration:
+  - Rules: 4 Entries, 4 Exits, 200 Parking Spots
+  - Simulation:
+    - Initial Active Cars: 20 (Intent: EXIT)
+    - Initial Parked Cars: 50
+    - New Arrivals: 50 (Lambda: 0.5)
+    - Total Cars Involved: 120
+Expected Output:
+  - Cars successfully navigate long distances across the large map.
+  - No timeouts or excessive planning delays.
+  - SUCCESS: All cars exit or park successfully.
+
+Scenario: medium_grid_heavy_load
+--------------------------------
+Description: A medium-sized grid subjected to a heavy load of 120 cars. This tests collision resolution and reservation table performance when space is moderately constrained.
+Grid Size: 30x20 (600 cells)
+Configuration:
+  - Rules: 3 Entries, 3 Exits, 150 Parking Spots
+  - Simulation:
+    - Initial Active Cars: 10 (Intent: EXIT)
+    - Initial Parked Cars: 40
+    - New Arrivals: 70 (Lambda: 0.6)
+    - Total Cars Involved: 120
+Expected Output:
+  - Robust handling of 100+ agents interacting.
+  - Efficient resolution of traffic jams near entries/exits.
+  - SUCCESS: All 10 initial active cars exit, and all 70 arriving cars find parking spots.
+
+Scenario: massive_congestion
+----------------------------
+Description: A stress test with 200 cars on a large 40x40 grid. This is the ultimate test for the system's throughput and stability limits.
+Grid Size: 40x40 (1600 cells)
+Configuration:
+  - Rules: 5 Entries, 5 Exits, 300 Parking Spots
+  - Simulation:
+    - Initial Active Cars: 20 (Intent: EXIT)
+    - Initial Parked Cars: 80
+    - New Arrivals: 100 (Lambda: 0.8 - Very fast arrivals)
+    - Total Cars Involved: 200
+Expected Output:
+  - The simulation completes without crashing or deadlocking.
+  - It manages to process 200 unique car agents.
+  - SUCCESS: All 20 initial active cars exit, and all 100 arriving cars find parking spots.

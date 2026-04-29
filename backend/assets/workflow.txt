@@ -1,0 +1,61 @@
+WORKFLOW:
+
+simulationCore is being initialized:
+    1) grid
+    2) parking_manager 
+    3) priority_planner
+    4) config
+    5) list of active cars  [empty at first]
+    6) list of car positions [empty at first]
+    
+    metrics:
+    1) arriving_cars_created
+    2) total_arrived
+    3) total_planned
+    4) total_planned
+    5) total_parked
+
+
+    then: 
+        function:
+             _initialize_cars(self) -> Spawn initial parked and active cars at time 0.
+        steps:
+            //creation + placement of parked cars (inactive agents that will never move)//
+            1) interates (0, config.initially_parked_cars):
+                    a. creates a car using self.parking_manager.create_parked_car():
+                        1. randomizes a parking spot to be parked in from self.free_spots (available parking spots)
+                        2. creates a new car in that parking spot with intent = None since its INACTIVE.
+                        3. increments car ID (for next car)
+                        4. sets the car's goal to be the parking spot he spawned on.
+                        5. remove parking spot from free_spots
+                        6. add parking spot to occupied_spots.
+                        7. return car.
+
+                    b. marks car's position (a parking spot) as occupied using self.parking_manager.mark_occupied(car, pos)     //NOTE: might be unecessary.
+                    c. reserves parking spots so other cars could not park in it using self.priority_planner.reservation_table.reserve_goal(pos, start(=0) +limit)   //NOTE: start+limit is finite (BUG POTENTIAL)
+                    d. increments number of total parked cars for metrics.
+
+            //creation + placement of active cars that are destined to EXIT//
+            2) interates (0, config.initial_active_cars)
+                    a. gain a random starting position (must be ROAD) using self._get_free_road_cell()
+                    b. create new car with intent = "EXIT" (default is "PARK") on the random genrated starting position.
+                    c. assign goal and plan using self._handle_new_car(car):
+                        a. add car to self.active_cars dict
+                        b. increment self.total_arrived cars  // MISTAKE! should only be for cars entering the parking lot
+                        c. assign goal using self.parking_manager.assign_goal(car, self.time)   //NOTE: gets time as argument but never uses it
+                            1.  if car.intent == "PARK" -> returns self.choose_free_parking_spot(car)
+                            2.  if car.intent == "EXIT" -> returns self.choose_exit_cell(car)
+
+                        d. if we could not assign a goal -> self.total_failed.plans += 1 -> stop function
+                        e. else: plan a path for the car using self.priority_planner.plan_for_car(car, self.time):
+                            1. calculates path using single_agent_planner (A* algorithm).  // Needs to be checked in the future.
+                            2.  if failed -> return FALSE 
+                            3. else: 
+                                    - reserve the path for the car (the car will be in cell(x,y) on time t) using self.reservation_table.reserve_path(path)
+                                    - reserve parking spot for the car
+                                    - return TRUE
+
+                        f. if returned FALSE -> total_failed_plans += 1
+                           if returned TRUE -> total_planned += 1
+
+
