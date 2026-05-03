@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from core.simulation_core import SimulationCore, SimulationConfig
 from core.parking_manager import ParkingManager
-from planning.priority_planner import PriorityPlanner
+from planning import planner_manager
 from planning.reservation_table import ReservationTable
 from generator.grid import Grid
 from generator.cell import CellType
@@ -126,13 +126,12 @@ def start_simulation(req: LiveSimulationRequest, db: Session = Depends(get_db)):
 
     parking_cells, exit_cells, entry_cells = _extract_cells(grid)
     total_spots = len(parking_cells)
-    requested_initial = req.initial_parked_cars + req.initial_active_cars
 
-    if requested_initial > total_spots:
+    if req.initial_cars > total_spots:
         raise HTTPException(
             status_code=400,
             detail=(
-                f"Requested {requested_initial} initial cars (parked + active), "
+                f"Requested {req.initial_cars} initial cars, "
                 f"but grid only has {total_spots} parking spots."
             ),
         )
@@ -148,7 +147,8 @@ def start_simulation(req: LiveSimulationRequest, db: Session = Depends(get_db)):
             entry_cells=entry_cells,
         )
         rt = ReservationTable()
-        pp = PriorityPlanner(
+        planner = planner_manager.create_planner(
+            algorithm=req.algorithm,
             grid=grid,
             reservation_table=rt,
             planning_horizon=req.planning_horizon,
@@ -157,15 +157,14 @@ def start_simulation(req: LiveSimulationRequest, db: Session = Depends(get_db)):
             planning_horizon=req.planning_horizon,
             goal_reserve_horizon=req.goal_reserve_horizon,
             arrival_lambda=req.arrival_lambda,
+            exit_rate=req.exit_rate,
+            initial_cars=req.initial_cars,
             max_arriving_cars=effective_max_arriving,
-            initial_parked_cars=req.initial_parked_cars,
-            initial_active_cars=req.initial_active_cars,
-            initial_active_exit_rate=req.initial_active_exit_rate,
         )
         return SimulationCore(
             grid=grid,
             parking_manager=pm,
-            priority_planner=pp,
+            planner=planner,
             config=cfg,
         )
 
@@ -224,12 +223,10 @@ def run_simulation(req: SimulationRequest, db: Session = Depends(get_db)):
     parking_cells, exit_cells, entry_cells = _extract_cells(grid)
     
     total_spots = len(parking_cells)
-    requested_initial_cars = req.initial_parked_cars + req.initial_active_cars
-    
-    if requested_initial_cars > total_spots:
+    if req.initial_cars > total_spots:
         raise HTTPException(
             status_code=400,
-            detail=f"Requested {requested_initial_cars} initial cars (parked + active), but grid only has {total_spots} parking spots."
+            detail=f"Requested {req.initial_cars} initial cars, but grid only has {total_spots} parking spots."
         )
 
     parking_manager = ParkingManager(
@@ -240,27 +237,27 @@ def run_simulation(req: SimulationRequest, db: Session = Depends(get_db)):
     )
     
     reservation_table = ReservationTable()
-    
-    priority_planner = PriorityPlanner(
+
+    planner = planner_manager.create_planner(
+        algorithm="priority",
         grid=grid,
         reservation_table=reservation_table,
-        planning_horizon=req.planning_horizon
+        planning_horizon=req.planning_horizon,
     )
-    
+
     config = SimulationConfig(
         planning_horizon=req.planning_horizon,
         goal_reserve_horizon=req.goal_reserve_horizon,
         arrival_lambda=req.arrival_lambda,
+        exit_rate=req.exit_rate,
+        initial_cars=req.initial_cars,
         max_arriving_cars=req.max_arriving_cars,
-        initial_parked_cars=req.initial_parked_cars,
-        initial_active_cars=req.initial_active_cars,
-        initial_active_exit_rate=req.initial_active_exit_rate
     )
     
     simulation = SimulationCore(
         grid=grid,
         parking_manager=parking_manager,
-        priority_planner=priority_planner,
+        planner=planner,
         config=config
     )
     
@@ -281,18 +278,16 @@ def run_simulation(req: SimulationRequest, db: Session = Depends(get_db)):
             avg_park = simulation.sum_steps_to_park / simulation.arriving_cars_parked_count
 
         avg_exit = 0.0
-        if simulation.initial_active_cars_exited_count > 0:
-            avg_exit = simulation.sum_steps_to_exit / simulation.initial_active_cars_exited_count
+        if simulation.total_exit_journeys > 0:
+            avg_exit = simulation.sum_steps_to_exit / simulation.total_exit_journeys
 
         stats = TimestepStatsDTO(
-            total_cars=simulation.total_arrived + simulation.config.initial_parked_cars, # Total cars involved so far
+            total_cars=simulation.config.initial_cars + simulation.arriving_cars_created,
             total_parked=simulation.total_parked,
             total_failed_plans=simulation.total_failed_plans,
-            
-            initial_active_cars_exited=simulation.initial_active_cars_exited_count,
+            total_exited=simulation.total_exited,
             arriving_cars_spawned=simulation.arriving_cars_created,
             arriving_cars_parked=simulation.arriving_cars_parked_count,
-            
             average_steps_to_park=avg_park,
             average_steps_to_exit=avg_exit
         )
@@ -327,25 +322,20 @@ def run_simulation(req: SimulationRequest, db: Session = Depends(get_db)):
         avg_park = simulation.sum_steps_to_park / simulation.arriving_cars_parked_count
 
     avg_exit = 0.0
-    if simulation.initial_active_cars_exited_count > 0:
-        avg_exit = simulation.sum_steps_to_exit / simulation.initial_active_cars_exited_count
+    if simulation.total_exit_journeys > 0:
+        avg_exit = simulation.sum_steps_to_exit / simulation.total_exit_journeys
 
     meta = SimulationMetaDTO(
         total_steps=simulation.time,
-        total_cars=simulation.total_arrived + simulation.total_parked, # Approximation of total involved
+        total_cars=simulation.config.initial_cars + simulation.arriving_cars_created,
         total_parked=simulation.total_parked,
         total_failed_plans=simulation.total_failed_plans,
         status=status,
         message=message,
-        
-        # New Metrics
-        initial_active_cars_configured=req.initial_active_cars,
-        initial_active_cars_exited=simulation.initial_active_cars_exited_count,
-        
-        max_arriving_cars_configured=req.max_arriving_cars,
+        initial_cars_configured=req.initial_cars,
+        total_exited=simulation.total_exited,
         arriving_cars_spawned=simulation.arriving_cars_created,
         arriving_cars_parked=simulation.arriving_cars_parked_count,
-        
         average_steps_to_park=avg_park,
         average_steps_to_exit=avg_exit
     )

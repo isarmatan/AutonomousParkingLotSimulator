@@ -145,16 +145,16 @@ class SimulationSession:
             else None
         )
         avg_exit = (
-            sim.sum_steps_to_exit / sim.initial_active_cars_exited_count
-            if sim.initial_active_cars_exited_count > 0
+            sim.sum_steps_to_exit / sim.total_exit_journeys
+            if sim.total_exit_journeys > 0
             else None
         )
 
         stats = {
-            "total_cars": sim.total_arrived + sim.config.initial_parked_cars,
+            "total_cars": sim.config.initial_cars + sim.arriving_cars_created,
             "total_parked": sim.total_parked,
             "total_failed_plans": sim.total_failed_plans,
-            "initial_active_cars_exited": sim.initial_active_cars_exited_count,
+            "total_exited": sim.total_exited,
             "arriving_cars_spawned": sim.arriving_cars_created,
             "arriving_cars_parked": sim.arriving_cars_parked_count,
             "average_steps_to_park": avg_park,

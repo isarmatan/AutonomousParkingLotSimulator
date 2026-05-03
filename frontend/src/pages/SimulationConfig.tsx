@@ -10,28 +10,23 @@ type SimConfig = {
   planning_horizon: number;
   goal_reserve_horizon: number;
   arrival_lambda: number;
-  max_arriving_cars: number;
-  initial_parked_cars: number;
-  initial_active_cars: number;
-  initial_active_exit_rate: number;
+  exit_rate: number;
+  initial_cars: number;
   max_timesteps: number;
   step_delay_ms: number;
   algorithm: string;
 };
 
-const STORAGE_KEY = "sim_config_v2";
+const STORAGE_KEY = "sim_config_v3";
 
 export default function SimulationConfig() {
   const nav = useNavigate();
 
-  // State matching backend API
   const [planningHorizon, setPlanningHorizon] = useState<number>(50);
   const [goalReserveHorizon, setGoalReserveHorizon] = useState<number>(200);
-  const [arrivalLambda, setArrivalLambda] = useState<number>(1);
-  const [maxArrivingCars, setMaxArrivingCars] = useState<number>(1);
-  const [initialParkedCars, setInitialParkedCars] = useState<number>(0);
-  const [initialActiveCars, setInitialActiveCars] = useState<number>(1);
-  const [initialActiveExitRate, setInitialActiveExitRate] = useState<number>(1.0);
+  const [arrivalLambda, setArrivalLambda] = useState<number>(0.3);
+  const [exitRate, setExitRate] = useState<number>(0.02);
+  const [initialCars, setInitialCars] = useState<number>(5);
   const [maxTimesteps, setMaxTimesteps] = useState<number>(0);
   const [stepDelayMs, setStepDelayMs] = useState<number>(100);
   const [algorithm, setAlgorithm] = useState<string>("priority");
@@ -40,11 +35,9 @@ export default function SimulationConfig() {
     () => ({
       planning_horizon: 50,
       goal_reserve_horizon: 200,
-      arrival_lambda: 1,
-      max_arriving_cars: 1,
-      initial_parked_cars: 0,
-      initial_active_cars: 1,
-      initial_active_exit_rate: 1.0,
+      arrival_lambda: 0.3,
+      exit_rate: 0.02,
+      initial_cars: 5,
       max_timesteps: 0,
       step_delay_ms: 100,
       algorithm: "priority",
@@ -56,11 +49,9 @@ export default function SimulationConfig() {
     const cfg: SimConfig = {
       planning_horizon: Math.max(1, Math.floor(planningHorizon)),
       goal_reserve_horizon: Math.max(1, Math.floor(goalReserveHorizon)),
-      arrival_lambda: Math.max(0, Number(arrivalLambda)),
-      max_arriving_cars: Math.max(0, Math.floor(maxArrivingCars)),
-      initial_parked_cars: Math.max(0, Math.floor(initialParkedCars)),
-      initial_active_cars: Math.max(0, Math.floor(initialActiveCars)),
-      initial_active_exit_rate: Math.max(0, Number(initialActiveExitRate)),
+      arrival_lambda: Math.max(0, Math.min(1, Number(arrivalLambda))),
+      exit_rate: Math.max(0, Math.min(1, Number(exitRate))),
+      initial_cars: Math.max(0, Math.floor(initialCars)),
       max_timesteps: Math.max(0, Math.floor(maxTimesteps)),
       step_delay_ms: Math.max(10, Math.floor(stepDelayMs)),
       algorithm,
@@ -80,61 +71,42 @@ export default function SimulationConfig() {
       <div className="setupPage">
         <div className="setupGrid">
           <section className="setupCard">
-            <CardHead icon={<Car size={18} />} title="Vehicle Counts" sub="Initial state and limits." />
+            <CardHead icon={<Car size={18} />} title="Vehicle Counts" sub="Cars in the lot and flow rates." />
 
             <FieldRow
               icon={<Hash size={16} />}
-              label="Static Parked Cars"
-              value={initialParkedCars}
+              label="Initial Cars (t=0)"
+              description="Number of cars already parked when the simulation starts. They have no goal — they will begin to leave over time based on the exit rate."
+              value={initialCars}
               min={0}
               max={500}
               step={1}
-              onChange={setInitialParkedCars}
-              onDefault={() => setInitialParkedCars(defaults.initial_parked_cars)}
-            />
-
-            <FieldRow
-              icon={<Hash size={16} />}
-              label="Exiting Cars"
-              value={initialActiveCars}
-              min={0}
-              max={500}
-              step={1}
-              onChange={setInitialActiveCars}
-              onDefault={() => setInitialActiveCars(defaults.initial_active_cars)}
-            />
-
-             <FieldRow
-              icon={<LogOut size={16} />}
-              label="Exit Rate (λ)"
-              value={initialActiveExitRate}
-              min={0}
-              max={1}
-              step={0.1}
-              onChange={setInitialActiveExitRate}
-              onDefault={() => setInitialActiveExitRate(defaults.initial_active_exit_rate)}
+              onChange={setInitialCars}
+              onDefault={() => setInitialCars(defaults.initial_cars)}
             />
 
             <FieldRow
               icon={<LogIn size={16} />}
-              label="Entering Cars"
-              value={maxArrivingCars}
-              min={0}
-              max={500}
-              step={1}
-              onChange={setMaxArrivingCars}
-              onDefault={() => setMaxArrivingCars(defaults.max_arriving_cars)}
-            />
-            <FieldRow
-              icon={<Activity size={16} />}
-              label="Enter Rate (λ)"
+              label="Arrival Rate (λ)"
+              description="Probability per timestep that a new car arrives at an entry cell and looks for a parking spot."
               value={arrivalLambda}
               min={0}
               max={1}
-              step={0.1}
+              step={0.01}
               onChange={setArrivalLambda}
               onDefault={() => setArrivalLambda(defaults.arrival_lambda)}
-              suffix="veh/min"
+            />
+
+            <FieldRow
+              icon={<LogOut size={16} />}
+              label="Exit Rate (per car)"
+              description="Probability per timestep that each individual parked car decides to leave. Higher values = faster turnover."
+              value={exitRate}
+              min={0}
+              max={1}
+              step={0.01}
+              onChange={setExitRate}
+              onDefault={() => setExitRate(defaults.exit_rate)}
             />
           </section>
 

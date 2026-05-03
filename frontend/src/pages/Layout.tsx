@@ -5,7 +5,7 @@ import "../pages/SimulationConfig.css";
 import bgHero from "../assets/HomePage.png";
 import { Database, PlusCircle, CheckCircle2, LayoutGrid } from "lucide-react";
 
-const CFG_KEY = "sim_config_v2";
+const CFG_KEY = "sim_config_v3";
 
 export default function Layout() {
   const nav = useNavigate();

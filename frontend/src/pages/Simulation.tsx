@@ -10,10 +10,8 @@ type SimConfig = {
   planning_horizon: number;
   goal_reserve_horizon: number;
   arrival_lambda: number;
-  max_arriving_cars: number;
-  initial_parked_cars: number;
-  initial_active_cars: number;
-  initial_active_exit_rate: number;
+  exit_rate: number;
+  initial_cars: number;
   max_timesteps: number;
   step_delay_ms: number;
   algorithm: string;
@@ -52,7 +50,7 @@ type TimestepStats = {
   total_cars: number;
   total_parked: number;
   total_failed_plans: number;
-  initial_active_cars_exited: number;
+  total_exited: number;
   arriving_cars_spawned: number;
   arriving_cars_parked: number;
   average_steps_to_park?: number;
@@ -69,7 +67,7 @@ type WsStatus = "IDLE" | "CONNECTING" | "RUNNING" | "PAUSED" | "STOPPED" | "COMP
 
 const API_URL = "http://127.0.0.1:8000";
 const WS_URL  = "ws://127.0.0.1:8000";
-const CONFIG_KEY = "sim_config_v2";
+const CONFIG_KEY = "sim_config_v3";
 const LAYOUT_KEY = "parking_layout_v1";
 
 const STATUS_CLASS: Record<WsStatus, string> = {
@@ -434,10 +432,10 @@ export default function Simulation() {
               {/* Stats Panel */}
               <div className="simStats">
                 <div className="statGroup">
-                  <div className="statGroupTitle">Initial Batch</div>
+                  <div className="statGroupTitle">Exits</div>
                   <div className="statRow">
                     <span className="statLabel">Exited</span>
-                    <span className="statValue">{liveStats?.initial_active_cars_exited ?? 0}</span>
+                    <span className="statValue">{liveStats?.total_exited ?? 0}</span>
                   </div>
                   {liveStats?.average_steps_to_exit != null && (
                     <div className="statRow">

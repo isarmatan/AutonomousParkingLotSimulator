@@ -25,10 +25,9 @@ class SimulationRequest(BaseModel):
     goal_reserve_horizon: int = 200
     arrival_lambda: float = 0.3
     max_arriving_cars: int = 30
-    initial_parked_cars: int = 2
-    initial_active_cars: int = 0
-    initial_active_exit_rate: float = 1.0  # Probability per step for an initial car to start exiting
-    
+    initial_cars: int = 5
+    exit_rate: float = 0.02
+
     # Safety stop
     max_steps: int = 1000
 
@@ -39,11 +38,11 @@ class TimestepStatsDTO(BaseModel):
     total_cars: int
     total_parked: int
     total_failed_plans: int
-    
-    initial_active_cars_exited: int
+
+    total_exited: int
     arriving_cars_spawned: int
     arriving_cars_parked: int
-    
+
     # Averages at this timestep
     average_steps_to_park: Optional[float] = None
     average_steps_to_exit: Optional[float] = None
@@ -63,15 +62,13 @@ class SimulationMetaDTO(BaseModel):
     total_cars: int
     total_parked: int
     total_failed_plans: int
-    
-    # Detailed Stats
-    initial_active_cars_configured: int
-    initial_active_cars_exited: int
-    
-    max_arriving_cars_configured: int
+
+    initial_cars_configured: int
+    total_exited: int
+
     arriving_cars_spawned: int
     arriving_cars_parked: int
-    
+
     average_steps_to_park: Optional[float] = None
     average_steps_to_exit: Optional[float] = None
 
@@ -83,19 +80,18 @@ class SimulationHistoryItemDTO(BaseModel):
     grid_width: Optional[int]
     grid_height: Optional[int]
     
-    initial_active_cars_configured: int
-    max_arriving_cars_configured: int
-    
+    initial_cars_configured: int
+
     total_steps: int
     total_cars: int
     total_parked: int
     total_failed_plans: int
     status: str
-    
-    initial_active_cars_exited: int
+
+    total_exited: int
     arriving_cars_spawned: int
     arriving_cars_parked: int
-    
+
     average_steps_to_park: Optional[float]
     average_steps_to_exit: Optional[float]
 
@@ -130,10 +126,9 @@ class LiveSimulationRequest(BaseModel):
     planning_horizon: int = 50
     goal_reserve_horizon: int = 200
     arrival_lambda: float = 0.3
+    exit_rate: float = 0.02             # per-car probability per step to leave
+    initial_cars: int = 5               # cars present at t=0 (all start parked)
     max_arriving_cars: int = 0          # 0 = unlimited
-    initial_parked_cars: int = 0
-    initial_active_cars: int = 0
-    initial_active_exit_rate: float = 1.0
 
     # Lifelong controls
     max_timesteps: int = 0              # 0 = run until stopped by client

@@ -3,20 +3,19 @@ from dataclasses import dataclass
 from typing import Dict, List, Tuple, Optional
 import random
 from generator.cell import CellType
+from planning.base_planner import BasePlanner
 Position = Tuple[int, int]
 
 
 @dataclass
 class SimulationConfig:
-    # max_steps: int
     planning_horizon: int
     goal_reserve_horizon: int
-    arrival_lambda: float    # Poisson arrival rate (prob per timestep)
-    
-    max_arriving_cars: int = 0            
-    initial_parked_cars: int = 0
-    initial_active_cars: int = 0
-    initial_active_exit_rate: float = 1  # Probability per step to wake up a waiting active car
+    arrival_lambda: float       # Poisson arrival rate (prob per timestep)
+    exit_rate: float            # Per-car probability per step to start exiting
+
+    initial_cars: int = 0       # Cars present at t=0 — all start parked with no goal
+    max_arriving_cars: int = 0  # 0 = unlimited
 
 
 class SimulationCore:
@@ -32,32 +31,32 @@ class SimulationCore:
     - Advance cars along their planned space-time paths
     """
 
-    def __init__(self, grid, parking_manager, priority_planner, config: SimulationConfig):
+    def __init__(self, grid, parking_manager, config: SimulationConfig,
+                 planner: BasePlanner = None, priority_planner: BasePlanner = None):
         self.grid = grid
         self.parking_manager = parking_manager
-        self.priority_planner = priority_planner
+        # Accept both 'planner' (new) and 'priority_planner' (legacy) keyword args
+        # so existing test/debug call-sites keep working without modification.
+        self.planner: BasePlanner = planner if planner is not None else priority_planner
         self.config = config
 
         self.time: int = 0
-        self.active_cars: Dict[int, object] = {}      # car_id -> Car
+        self.active_cars: Dict[int, object] = {}      # car_id -> Car (currently moving)
+        self.parked_cars: Dict[int, object] = {}      # car_id -> Car (idle, waiting to exit)
         self.car_positions: Dict[int, Position] = {}  # car_id -> (x, y)
         self.all_cars: Dict[int, object] = {}
         self.exited_car_ids = set()
         self.cars_pending_removal = set() # Cars that reached exit but need to persist for one frame
-        
-        # New: waiting active cars (initialized but not yet moving to exit)
-        self.waiting_active_cars: List[object] = []
 
         # Metrics
         self.arriving_cars_created = 0
-
         self.total_arrived = 0
         self.total_planned = 0
         self.total_failed_plans = 0
         self.total_parked = 0
-        
-        # New Detailed Metrics
-        self.initial_active_cars_exited_count = 0
+
+        self.total_exited = 0           # all cars that left the lot
+        self.total_exit_journeys = 0    # denominator for avg_steps_to_exit
         self.arriving_cars_parked_count = 0
         self.sum_steps_to_park = 0
         self.sum_steps_to_exit = 0
@@ -69,66 +68,30 @@ class SimulationCore:
     # -------------------------------------------------
 
     def _initialize_cars(self):
-        """Spawn initial parked and active cars at time 0."""
-
-        # Capacity Check
+        """Place initial_cars cars into the lot at t=0. All start idle (no goal)."""
         total_spots = len(self.parking_manager.parking_cells)
-        required_spots = self.config.initial_parked_cars + self.config.initial_active_cars
-        
-        if required_spots > total_spots:
-            # We assume the user wants us to cap the active cars if we run out of space
-            # (Preserving initial_parked_cars count as priority, reducing active if needed)
-            max_active = max(0, total_spots - self.config.initial_parked_cars)
-            if self.config.initial_active_cars > max_active:
-                print(f"[WARNING] Not enough parking spots! Capping initial_active_cars from {self.config.initial_active_cars} to {max_active}")
-                self.config.initial_active_cars = max_active
+        if self.config.initial_cars > total_spots:
+            print(f"[WARNING] initial_cars ({self.config.initial_cars}) exceeds capacity "
+                  f"({total_spots}). Capping.")
+            self.config.initial_cars = total_spots
 
-        # --- parked cars (static obstacles) ---
-        for _ in range(self.config.initial_parked_cars):
+        for _ in range(self.config.initial_cars):
             if not self.parking_manager.free_spots:
                 break
-            
+
             car = self.parking_manager.create_parked_car()
+            car.is_initial = True
             pos = car.current_position
 
             self.all_cars[car.car_id] = car
+            self.parked_cars[car.car_id] = car
             self.car_positions[car.car_id] = pos
 
             self.parking_manager.mark_occupied(car, pos)
-            self.priority_planner.reservation_table.reserve_goal(
+            self.planner.reservation_table.reserve_goal(
                 pos[0], pos[1], start_time=0, horizon=self.config.goal_reserve_horizon
             )
             self.total_parked += 1
-
-        # --- active cars (start in parking, intent=EXIT) ---
-        # Instead of planning them immediately, we put them in 'waiting' state
-        # They occupy the spot statically until they 'wake up'
-        for _ in range(self.config.initial_active_cars):
-            if not self.parking_manager.free_spots:
-                break
-            
-            # Pick a free spot manually to consume it
-            spot = random.choice(list(self.parking_manager.free_spots))
-            self.parking_manager.free_spots.remove(spot)
-            
-            # Create car
-            car = self.parking_manager.create_active_car(spot, intent="EXIT")
-            car.spawn_time = 0 # Track creation time
-            car.is_initial = True
-            
-            # Register it
-            self.active_cars[car.car_id] = car
-            self.car_positions[car.car_id] = spot
-            self.all_cars[car.car_id] = car
-            self.total_arrived += 1
-            
-            # Reserve its spot statically for now (it's effectively parked)
-            self.priority_planner.reservation_table.reserve_goal(
-                spot[0], spot[1], start_time=0, horizon=self.config.goal_reserve_horizon
-            )
-            
-            # Add to waiting list
-            self.waiting_active_cars.append(car)
 
     # -------------------------------------------------
     # Runtime helpers
@@ -147,48 +110,42 @@ class SimulationCore:
             # So waiting cars are effectively walls.
             # However, once they wake up, we unreserve the goal.
             
-            # Check for cars that are active (moving) but have no path (failed plan?)
-            if c not in self.waiting_active_cars and not c.has_path():
+            if not c.has_path():
                 obs.add(c.current_position)
         return obs
 
-    def _process_waiting_active_cars(self):
-        """Wake up waiting cars based on exit rate."""
-        if not self.waiting_active_cars:
+    def _process_parked_car_exits(self):
+        """Each idle parked car has exit_rate probability per step of starting to leave."""
+        if not self.parked_cars:
+            return
+        to_wake = [car for car in list(self.parked_cars.values())
+                   if random.random() < self.config.exit_rate]
+        for car in to_wake:
+            self._wake_parked_car(car)
+
+    def _wake_parked_car(self, car):
+        """Move an idle parked car into active state with EXIT intent."""
+        cx, cy = car.current_position
+        self.planner.reservation_table.unreserve_goal(cx, cy, 0)
+        self.parking_manager.free_spots.add((cx, cy))
+        self.parking_manager.occupied_spots.discard((cx, cy))
+
+        del self.parked_cars[car.car_id]
+        car.intent = "EXIT"
+        car.exit_start_time = self.time
+        self.active_cars[car.car_id] = car
+
+        goal = self.parking_manager.assign_goal(car, self.time)
+        car.goal = goal
+        if goal is None:
+            self.total_failed_plans += 1
             return
 
-        # Iterate copy so we can remove
-        woke_up = []
-        for car in self.waiting_active_cars:
-            if random.random() < self.config.initial_active_exit_rate:
-                woke_up.append(car)
-        
-        for car in woke_up:
-            self.waiting_active_cars.remove(car)
-            
-            # Unreserve the static spot
-            # NOTE: We need to be careful about the time horizon. 
-            # We reserved it at t=0 forever. Now we free it from NOW onwards?
-            # actually unreserve_goal removes it from static_cells completely.
-            # That is fine, because the car is physically there, so it will be treated 
-            # as an obstacle by _get_unplanned_obstacles or by the car itself being in car_positions?
-            #
-            # Wait. If I remove it from static_cells, is it protected?
-            # _get_unplanned_obstacles adds cars with no path.
-            # The waking car has no path yet. So it will be added to obs for OTHERS.
-            # What about for ITSELF? It is at current_position.
-            #
-            # The planner treats obstacles as (x,y) to avoid at time t.
-            # It should be fine.
-            
-            cx, cy = car.current_position
-            self.priority_planner.reservation_table.unreserve_goal(cx, cy, 0)
-            
-            # Free the spot so new cars can park there
-            self.parking_manager.free_spots.add((cx, cy))
-
-            # Now treat it as a "new" car starting its journey
-            self._handle_new_car(car, start_time=self.time)
+        obstacles = self._get_unplanned_obstacles(exclude_car_id=car.car_id)
+        ok = self.planner.plan_for_car(car, self.time, obstacles=obstacles)
+        if not ok:
+            self.total_failed_plans += 1
+            car.plan_fail_count += 1
 
     def _maybe_poisson_arrival(self):
         if self.arriving_cars_created >= self.config.max_arriving_cars:
@@ -230,7 +187,7 @@ class SimulationCore:
 
         obstacles = self._get_unplanned_obstacles(exclude_car_id=car.car_id)
         
-        ok = self.priority_planner.plan_for_car(car, start_time, obstacles=obstacles)
+        ok = self.planner.plan_for_car(car, start_time, obstacles=obstacles)
         if ok:
              self.total_planned += 1
              car.plan_fail_count = 0
@@ -260,10 +217,6 @@ class SimulationCore:
         # This helps clear congestion at exits/entries.
         cars_needing_plan = []
         for car in self.active_cars.values():
-            # Skip waiting cars (they are technically active but haven't started exiting yet)
-            if car in self.waiting_active_cars:
-                continue
-
             if not car.has_path():
                 cars_needing_plan.append(car)
         
@@ -290,7 +243,7 @@ class SimulationCore:
             # Randomized persistence to break symmetry in deadlocks
             persistence = random.randint(10, 30)
             
-            ok = self.priority_planner.plan_for_car(
+            ok = self.planner.plan_for_car(
                 car, 
                 self.time, 
                 obstacles=obstacles,
@@ -435,27 +388,27 @@ class SimulationCore:
                     completed_path = car.path
                     if car.intent == "PARK":
                         self.total_parked += 1
-                        if not car.is_initial:
-                            self.arriving_cars_parked_count += 1
-                            self.sum_steps_to_park += (self.time - car.spawn_time)
+                        self.arriving_cars_parked_count += 1
+                        self.sum_steps_to_park += (self.time - car.spawn_time)
 
                         self.parking_manager.mark_occupied(car, final_pos)
                         if completed_path:
-                            self.priority_planner.reservation_table.unreserve_path(completed_path)
+                            self.planner.reservation_table.unreserve_path(completed_path)
                             gx, gy, gt = completed_path[-1]
-                            self.priority_planner.reservation_table.reserve_goal(
+                            self.planner.reservation_table.reserve_goal(
                                 gx, gy, gt, horizon=self.config.goal_reserve_horizon
                             )
                         car.clear_path()
+                        self.parked_cars[car_id] = car
                     elif car.intent == "EXIT":
-                         if car.is_initial:
-                             self.initial_active_cars_exited_count += 1
-                             self.sum_steps_to_exit += (self.time - car.spawn_time)
+                         self.total_exited += 1
+                         self.total_exit_journeys += 1
+                         self.sum_steps_to_exit += self.time - getattr(car, 'exit_start_time', self.time)
 
                          # Remove from tracking so it doesn't block the exit
                          self.exited_car_ids.add(car_id)
                          if completed_path:
-                             self.priority_planner.reservation_table.unreserve_path(completed_path)
+                             self.planner.reservation_table.unreserve_path(completed_path)
                          
                          # Defer removal from car_positions so it shows up in this step's snapshot
                          # if car_id in self.car_positions:
@@ -472,7 +425,7 @@ class SimulationCore:
                 if intended_moves[car_id] != curr_pos:
                     # It wanted to move but was blocked/reverted
                     # We MUST cancel its plan because it is now off-path (time desync)
-                    self.priority_planner.cancel_plan(car)
+                    self.planner.cancel_plan(car)
                     car.blocked_count += 1
 
                     if car.intent == "PARK" and car.blocked_count % 3 == 0:
@@ -501,18 +454,24 @@ class SimulationCore:
                              completed_path = car.path
                              if car.intent == "PARK":
                                  self.total_parked += 1
+                                 self.arriving_cars_parked_count += 1
+                                 self.sum_steps_to_park += (self.time - car.spawn_time)
                                  self.parking_manager.mark_occupied(car, curr_pos)
                                  if completed_path:
-                                     self.priority_planner.reservation_table.unreserve_path(completed_path)
+                                     self.planner.reservation_table.unreserve_path(completed_path)
                                      gx, gy, gt = completed_path[-1]
-                                     self.priority_planner.reservation_table.reserve_goal(
+                                     self.planner.reservation_table.reserve_goal(
                                          gx, gy, gt, horizon=self.config.goal_reserve_horizon
                                      )
                                  car.clear_path()
+                                 self.parked_cars[car_id] = car
                              elif car.intent == "EXIT":
+                                 self.total_exited += 1
+                                 self.total_exit_journeys += 1
+                                 self.sum_steps_to_exit += self.time - getattr(car, 'exit_start_time', self.time)
                                  self.exited_car_ids.add(car_id)
                                  if completed_path:
-                                     self.priority_planner.reservation_table.unreserve_path(completed_path)
+                                     self.planner.reservation_table.unreserve_path(completed_path)
                                  
                                  # Defer removal from car_positions so it shows up in this step's snapshot
                                  # if car_id in self.car_positions:
@@ -550,7 +509,7 @@ class SimulationCore:
             safe = True
             check_horizon = 20 # Check 20 steps ahead
             for t_offset in range(check_horizon):
-                if not self.priority_planner.reservation_table.is_cell_free(x, y, self.time + t_offset):
+                if not self.planner.reservation_table.is_cell_free(x, y, self.time + t_offset):
                     safe = False
                     break
             
@@ -582,7 +541,7 @@ class SimulationCore:
                 safe = True
                 check_horizon = 20 # Check 20 steps ahead
                 for t_offset in range(check_horizon):
-                    if not self.priority_planner.reservation_table.is_cell_free(x, y, self.time + t_offset):
+                    if not self.planner.reservation_table.is_cell_free(x, y, self.time + t_offset):
                         safe = False
                         break
                 
@@ -608,7 +567,7 @@ class SimulationCore:
 
     def step(self):
         self._cleanup_exited_cars()
-        self._process_waiting_active_cars()
+        self._process_parked_car_exits()
         self._advance_cars()
         self._maybe_poisson_arrival()
         self.time += 1
