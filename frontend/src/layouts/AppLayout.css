@@ -1,0 +1,229 @@
+/* Reset בסיסי */
+* { box-sizing: border-box; }
+html, body, #root { height: 100%; }
+
+body {
+  margin: 0;
+  background: #000;
+  font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+}
+
+/* ========= Layout ========= */
+.appLayout {
+  min-height: 100vh;
+  background: #0b1420;
+  color: #eaf2ff;
+}
+
+.appLayout__content {
+  padding: 24px;
+}
+
+.appLayout--editor .appLayout__content {
+  padding: 0;
+  height: calc(100vh - 98px); /* Full height minus header */
+  overflow: hidden;
+}
+
+/* ========= Header ========= */
+.appLayout__header {
+  height: 98px;               
+  display: flex;
+  align-items: center;
+  padding: 0 34px;            
+  background: rgba(10, 25, 45, 0.95);
+  border-bottom: 1px solid rgba(160, 220, 255, 0.16);
+  position: sticky;
+  top: 0;
+  z-index: 50;
+}
+
+.appLayout__header::before{
+  content:"";
+  position:absolute;
+  left:0; right:0; top:0;
+  height: 4px; 
+  background: linear-gradient(90deg,
+    rgba(58,214,208,0.95),
+    rgba(139,124,255,0.95),
+    rgba(232,166,255,0.90),
+    rgba(246,195,122,0.80)
+  );
+  opacity: 0.95;
+}
+
+.appLayout__header::after{
+  content:"";
+  position:absolute;
+  inset:-42px;
+  pointer-events:none;
+  background:
+    radial-gradient(45% 35% at 15% 25%, rgba(232,166,255,0.18), transparent 60%),
+    radial-gradient(45% 35% at 60% 0%, rgba(58,214,208,0.14), transparent 65%),
+    radial-gradient(45% 35% at 85% 40%, rgba(139,124,255,0.14), transparent 65%);
+  filter: blur(18px);
+  opacity: 0.75;
+  z-index: -1;
+}
+
+.appLayout__headerInner{
+  display:flex;
+  align-items:center;
+  gap: 22px;      
+  width: 100%;
+}
+
+/* ========= Home link ========= */
+.appLayout__home {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 20px;         
+  border-radius: 16px;
+  font-weight: 950;
+  font-size: 1.2rem;          
+  letter-spacing: 0.2px;
+  color: rgba(220, 248, 255, 0.97);
+  text-decoration: none;
+
+  border: 1px solid rgba(160, 220, 255, 0.24);
+  background: rgba(255,255,255,0.15);
+  box-shadow: 0 18px 55px rgba(0,0,0,0.30);
+
+  transition: transform .15s ease, box-shadow .15s ease, border-color .15s ease;
+}
+
+.appLayout__home:hover {
+  transform: translateY(-1px);
+  border-color: rgba(58,214,208,0.58);
+  box-shadow:
+    0 0 0 5px rgba(58,214,208,0.14),
+    0 22px 70px rgba(0,0,0,0.36);
+}
+
+.appLayout__home:active {
+  transform: translateY(0px);
+}
+
+/* divider */
+.appLayout__divider{
+  width: 1px;
+  height: 30px;
+  background: rgba(255,255,255,0.16);
+}
+
+/* ========= Title ========= */
+.appLayout__title {
+  font-weight: 950;
+  font-size: 1.35rem;       
+  letter-spacing: 0.15px;
+  color: rgba(234, 242, 255, 0.94);
+  text-shadow: 0 0 18px rgba(91,190,255,0.14);
+}
+
+/* ========= Variants ========= */
+.appLayout--cinematic {
+  background: radial-gradient(circle at top, #102a43, #060b12);
+}
+
+.appLayout--dashboard {
+  background: #0a1220;
+}
+
+.appLayout--workspace {
+  background: #0b1420;
+}
+
+/* ========= Responsive ========= */
+@media (max-width: 720px){
+  .appLayout__header{
+    height: 88px;
+    padding: 0 16px;
+  }
+
+  .appLayout__home{
+    padding: 12px 14px;
+    font-size: 1.08rem;
+  }
+
+  .appLayout__title{
+    font-size: 1.1rem;
+  }
+
+  .appLayout__divider{
+    display:none;
+  }
+}
+
+/* ===== Cinematic background layers ===== */
+.appLayout__cinematicBg{
+  position: fixed;
+  inset: 0;
+  z-index: -2;
+  background-size: cover;
+  background-position: center;
+  filter: blur(18px) brightness(0.95) saturate(1.05);
+  transform: scale(1.08);
+  pointer-events: none;
+}
+
+.appLayout__cinematicOverlay{
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  background:
+    radial-gradient(1200px 600px at 50% 0%, rgba(0, 170, 255, 0.10), transparent 60%),
+    rgba(6, 14, 26, 0.30);
+  pointer-events: none;
+}
+
+/* ===== Cinematic background ===== */
+
+.appLayout{
+  position: relative;
+  min-height: 100vh;
+  isolation: isolate;
+}
+
+.appLayout__cinematicBg{
+  position: fixed;
+  inset: 0;
+  z-index: -2;        
+  background-size: cover;
+  background-position: center;
+  filter: blur(18px) brightness(0.95) saturate(1.05);
+  transform: scale(1.08);
+  pointer-events: none;
+}
+
+.appLayout__cinematicOverlay{
+  position: fixed;
+  inset: 0;
+  z-index: -1;            
+  background:
+    radial-gradient(1200px 600px at 50% 0%, rgba(0, 170, 255, 0.10), transparent 60%),
+    rgba(6, 14, 26, 0.30);
+  pointer-events: none;
+}
+
+.appLayout--cinematic{
+  background: transparent;
+}
+
+/* ===== Brand (Logo + Title) ===== */
+.appLayout__brand {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.appLayout__logo {
+  height: 68px;         
+  width: auto;
+  object-fit: contain;
+  filter: drop-shadow(0 0 10px rgba(91,190,255,0.25));
+}
+
+.appLayout__logo--right {
+  margin-left: auto; 
+}
