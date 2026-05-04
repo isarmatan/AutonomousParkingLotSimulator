@@ -1,0 +1,30 @@
+Simulation Config CSS Performance Analysis & Recommendations
+
+Similar to the Stats page, the Simulation Config page uses expensive graphical effects that can impact rendering performance and responsiveness, especially on lower-end devices or when the browser is under load.
+
+1. **Backdrop-Filter Usage (Critical)**
+   - **Issue:** `backdrop-filter` is used on `.setupHeader` (blur 16px + saturate) and `.setupCard` (blur 20px).
+   - **Impact:** Forces the browser to perform real-time blurring of the background behind these elements. Since the config page has interactive elements (sliders, inputs) and potentially a large background image, this can cause input lag or choppy animations.
+   - **Recommendation:**
+     - Remove `backdrop-filter` and `-webkit-backdrop-filter` from `.setupHeader` and `.setupCard`.
+     - Increase the background opacity of these elements (e.g., from `0.65`/`0.7` to `0.9` or `0.95`) to maintain legibility without the blur cost.
+
+2. **Drop-Shadow Filters on Inputs**
+   - **Issue:** `.rangeInput` uses `filter: drop-shadow(0 0 5px rgba(56, 189, 248, 0.5));`.
+   - **Impact:** CSS filters on interactive elements (like range sliders) can cause repaints during the drag interaction, making the slider feel "heavy" or laggy.
+   - **Recommendation:** Replace `filter: drop-shadow(...)` with a standard `box-shadow` or remove it. `box-shadow` is generally more performant than `filter`.
+
+3. **Box Shadows & Gradients**
+   - **Issue:** Complex `box-shadow` definitions on `.setupHeader` and `.setupCard`.
+   - **Impact:** Large blur radii on shadows consume GPU resources.
+   - **Recommendation:** Simplify shadows or reduce their blur radius if slowness persists, though removing backdrop-filter usually yields the biggest gain.
+
+4. **Text Shadows**
+   - **Issue:** `.setupTitle` has `text-shadow: 0 0 20px ...`.
+   - **Impact:** Minor, but adds to the composite time.
+   - **Recommendation:** Keep as is unless extreme optimization is needed, as it's static text.
+
+**Summary of Proposed Fixes:**
+1. Remove `backdrop-filter` from Header and Cards.
+2. Increase background opacity for Header and Cards.
+3. Replace `filter: drop-shadow` on range inputs with `box-shadow` or remove.

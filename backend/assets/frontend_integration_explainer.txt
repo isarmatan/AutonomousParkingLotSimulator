@@ -1,0 +1,162 @@
+Frontend <-> Backend Integration Guide
+======================================
+
+This guide explains how to connect your React frontend to the FastAPI backend for the Parking Lot Simulation project.
+Since you are running both on the same laptop for your presentation, this setup relies on `localhost`.
+
+1. Running the System
+---------------------
+You need two terminals open:
+
+Terminal 1 (Backend):
+  cd "path/to/project"
+  # Make sure virtual env is active if you use one
+  uvicorn api_app:app --reload --port 8000
+
+  * The backend will listen at: http://127.0.0.1:8000
+  * Swagger UI (for testing/docs): http://127.0.0.1:8000/docs
+
+Terminal 2 (Frontend):
+  cd "path/to/frontend"
+  npm start
+
+  * The frontend usually runs at: http://localhost:3000
+
+**CORS Note**: The backend has been configured to allow requests from any origin (`*`), so your React app on port 3000 can talk to port 8000 without issues.
+
+2. API Connection Overview
+--------------------------
+Base URL for all requests: `http://127.0.0.1:8000`
+
+Process A: Simulation Configuration & Execution
+-----------------------------------------------
+**Goal**: User configures params, clicks "Start", and receives the full simulation trace.
+
+1. **User Action**: Fills out form (Arrival Rate, Max Time, Grid Selection).
+2. **Frontend Request**:
+   `POST /simulation/run`
+   
+   Body (Generate New):
+   ```json
+   {
+     "source": "generate",
+     "width": 20, "height": 20,
+     "rules": { "num_entries": 2, "num_exits": 2, "num_parking_spots": 15 },
+     "planning_horizon": 50,
+     "arrival_lambda": 0.5,
+     "max_steps": 500,
+     "initial_parked_cars": 5,
+     "initial_active_cars": 0
+   }
+   ```
+   
+   Body (Load Saved):
+   ```json
+   {
+     "source": "load",
+     "parkingLotId": "UUID-STRING-HERE",
+     "planning_horizon": 50,
+     "arrival_lambda": 0.5,
+     "max_steps": 500,
+     "initial_parked_cars": 5,
+     "initial_active_cars": 0
+   }
+   ```
+
+3. **Backend Response**:
+   Returns a large JSON object containing:
+   - `grid`: The static map layout.
+   - `timesteps`: Array of `{ t: 0, cars: { "car_id": [x, y], ... } }`.
+   - `meta`: Stats like total cars, total steps.
+     - `status`: "COMPLETED" or "MAX_STEPS_REACHED"
+     - `message`: Optional warning message if not completed.
+
+4. **Frontend Action**:
+   - Store `grid` and `timesteps` in React state.
+   - Initialize a visualizer (Canvas/Grid) using `grid` for background.
+   - Use a slider or timer to iterate through `timesteps` and render car positions.
+
+Process B: Loading Saved Parking Lots
+-------------------------------------
+**Goal**: Show a list of saved maps when the user opens the simulation config or load screen.
+
+1. **Frontend Request** (on component mount):
+   `GET /editor/saved`
+
+2. **Backend Response**:
+   ```json
+   {
+     "items": [
+       { 
+         "id": "uuid-1", 
+         "name": "Downtown Structure",
+         "width": 20, 
+         "height": 20,
+         "capacity": 50,
+         "num_entries": 2,
+         "num_exits": 2,
+         "preview_matrix": [
+            "####################",
+            "E..................#",
+            "#.PPPPPPPPPPPPPPPP.#",
+            "..."
+         ]
+       },
+       { "id": "uuid-2", "name": "Test Lot A", ... }
+     ]
+   }
+   ```
+
+3. **Frontend Action**:
+   - Populate a `<select>` dropdown with these items.
+   - When selected, use the `id` for Process A (`parkingLotId`).
+
+Process C: Parking Lot Editor
+-----------------------------
+**Goal**: Create a custom map, validate it, and save it to the DB.
+
+The editor is stateful on the server (Drafts).
+
+1. **Start Editing**:
+   `POST /editor/drafts`
+   Body: `{ "source": "blank", "width": 10, "height": 10 }`
+   Response: `{ "draftId": "uuid-draft", "grid": { ... } }`
+
+2. **Apply User Changes** (Clicking a cell):
+   `POST /editor/drafts/{draftId}/actions:apply`
+   Body: `{ "action": { "type": "PAINT", "x": 5, "y": 5, "cellType": "WALL" } }`
+   
+   Response: 
+   - `ok`: true/false
+   - `grid`: Updated grid (sync local state with this)
+   - `error`: If invalid (e.g., placing parking on wall), show error toast.
+
+3. **Save**:
+   `POST /editor/drafts/{draftId}:save`
+   Body: `{ "name": "My Custom Lot" }`
+   
+   Response: `{ "ok": true, "parkingLotId": "new-uuid" }` -> Redirect to home.
+
+Example JavaScript (Fetch)
+--------------------------
+```javascript
+const BASE_URL = "http://127.0.0.1:8000";
+
+async function runSimulation(config) {
+  try {
+    const response = await fetch(`${BASE_URL}/simulation/run`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(config)
+    });
+    
+    if (!response.ok) throw new Error("Simulation failed");
+    
+    const data = await response.json();
+    console.log("Simulation results:", data);
+    return data; // { grid, timesteps, meta }
+  } catch (err) {
+    console.error(err);
+  }
+}
+```

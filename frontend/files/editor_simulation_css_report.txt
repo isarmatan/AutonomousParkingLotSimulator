@@ -1,0 +1,30 @@
+Editor & Simulation CSS Performance Analysis
+
+These two pages are the most interaction-heavy parts of the application. The excessive use of glassmorphism (blur) and filters here is likely causing significant frame drops during canvas rendering and interaction (dragging, hovering).
+
+1. **Editor Page - Heavy Backdrop Filters**
+   - **Sidebar (.editorSidebar):** Uses `backdrop-filter: blur(24px) saturate(1.8)`. This is a large vertical area constantly repainting over the complex canvas background.
+   - **Header (.editorHeader):** Uses `blur(16px) saturate(1.8)`.
+   - **Cards & Dialogs:** `.editorCard` and `.editorSaveDialog` also use expensive blurs.
+   - **Recommendation:** Remove all `backdrop-filter` properties. Use `rgba(15, 23, 42, 0.95)` for a solid, sleek dark look that performs well.
+
+2. **Simulation Page - Stats Overlay & Canvas**
+   - **Stats Panel (.simStats):** This floating panel uses `blur(16px)` and sits on top of the canvas. Every time the simulation updates (which is frequent), the browser has to recompose this blurred layer.
+   - **Canvas Wrapper (.canvasWrapper):** Uses `blur(4px)`.
+   - **Recommendation:** Remove `backdrop-filter` from `.simStats` and `.canvasWrapper`. Increase opacity to `0.95`.
+
+3. **CSS Filters & Shadows**
+   - **Icons:** `.editorToolIcon` and `.errorIcon` use `filter: drop-shadow(...)`. This forces a texture upload for the shadow generation.
+   - **Hover Effects:** `.editorCell:hover` uses `filter: brightness(1.2)`. On a large grid, hovering quickly can cause stuttering.
+   - **Recommendation:**
+     - Replace `filter: drop-shadow` with `box-shadow` where possible, or remove.
+     - For hover effects, use `background-color` changes or `opacity` instead of `filter`.
+
+4. **Complex Gradients**
+   - **Backgrounds:** Both pages use multiple `radial-gradient` layers for the "dots" and "glows".
+   - **Recommendation:** If performance is still an issue after removing blurs, consider flattening these gradients into a static image or reducing the number of gradient layers.
+
+**Summary of Proposed Fixes:**
+1. Remove `backdrop-filter` from Editor Sidebar, Header, Stats Panel, and Dialogs.
+2. Replace expensive CSS filters (`drop-shadow`, `brightness`) with cheaper alternatives (`box-shadow`, `opacity`/`background-color`).
+3. Increase background opacity to compensate for lost blur.

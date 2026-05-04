@@ -1,0 +1,177 @@
+Windsurf handoff - LaCAM0 modular integration planning
+Autonomous Parking Lot Simulator
+
+Context
+=======
+I am switching to a new Windsurf session. Please do not implement changes yet.
+Your first job is to inspect the current codebase and produce a careful new design/implementation plan for integrating LaCAM0 as an additional planner while preserving the existing Priority Planner behavior.
+
+Important previous files to read first
+======================================
+1. windsurf_lifelong_lacam_architecture_prompt_v2.txt
+   - This was the original planning prompt.
+   - It explains the desired move from offline simulation to lifelong/live simulation.
+   - It also explains LaCAM0 at a high level and its MAPF benchmark input/output style.
+
+2. architecture_plan_lifelong_lacam0.txt
+   - This was the architecture plan produced from the previous prompt.
+   - It designed the main WebSocket/live simulation architecture.
+   - It proposed session management, WebSocket messages, planner abstraction, and LaCAM0 integration.
+
+3. windows_setup.txt
+   - This contains important information about setting up LaCAM0 on Windows.
+   - In the previous plan we assumed LaCAM0 would run in Ubuntu WSL, but now LaCAM0 has been set up on Windows in a separate Windsurf session.
+   - Please read this file to understand the actual Windows setup.
+
+4. lacam_api.txt
+   - This contains important information about the current LaCAM0 API / wrapper / expected usage.
+   - Please read this carefully before designing the integration.
+
+What was already done
+=====================
+Phase 1 of the previous architecture was implemented.
+The system is no longer just an offline request/response playback model.
+The goal is now a live/lifelong simulation architecture where the simulation can keep running hypothetically forever unless the user manually stops it or configures an optional timestep limit.
+
+An additional important change was also implemented:
+The system now runs by PACE.
+This means the user does not directly configure an exact fixed number of cars that will enter or leave.
+Instead, the user configures:
+- the pace/rate at which cars enter the parking lot
+- the pace/rate at which cars leave the parking lot
+- how many cars are initially in the parking lot
+
+Important note:
+There can be more total agents over the lifetime of the simulation than the number of agents visible at timestep 0.
+The simulation is lifelong/dynamic, so new agents may appear later according to the entry pace, and parked agents may later decide to exit according to the exit pace.
+
+Current goal
+============
+I want to integrate LaCAM0 as a selectable algorithm.
+When the user selects LaCAM0, the system should use LaCAM0 for path planning.
+When the user selects Priority Planner, the existing priority planner should continue working and should not be broken.
+
+This is important because in the future I want to compare algorithms and maybe add more algorithms.
+So the design should be modular and extensible.
+
+Critical design point
+=====================
+Priority Planner and LaCAM0 are conceptually different.
+
+Priority Planner:
+- Plans cars individually / in priority order.
+- Uses the ReservationTable for space-time reservations.
+- Fits the current existing architecture more naturally.
+
+LaCAM0:
+- Is a MAPF solver.
+- Solves a batch MAPF problem with multiple active agents together.
+- Does not use the existing ReservationTable in the same way.
+- Requires MAPF benchmark-style files:
+  - .map file, representing the grid
+  - .scen file, representing active agents with start/goal positions
+  - result file, representing positions per timestep
+- Therefore it may require a different simulation/planning flow than Priority Planner.
+
+Please do not force LaCAM0 into the same exact interface if that creates bad design.
+Instead, design the correct abstraction.
+
+Important architecture question
+===============================
+The hardest class to adapt may be SimulationCore.
+The current SimulationCore may be too tied to the existing Priority Planner / ReservationTable style.
+
+Please think carefully about whether the right design is:
+1. One SimulationCore with pluggable strategy objects,
+2. A base simulation engine with algorithm-specific simulation cores,
+3. A SimulationCoreFactory that creates PrioritySimulationCore vs LacamSimulationCore,
+4. A PlannerManager/ExecutionManager split,
+5. Or another design you think is better.
+
+I am open to your recommendation.
+Do not just follow my suggestions blindly.
+Design based on what is correct, maintainable, and modular.
+
+Expected design goals
+=====================
+The new architecture should:
+
+1. Preserve existing Priority Planner behavior.
+   - Priority Planner should continue working as before.
+   - Do not break the current reservation-table based logic.
+
+2. Add LaCAM0 as an alternative planner.
+   - User selects algorithm in the frontend.
+   - Backend creates the correct simulation/planning components based on the selected algorithm.
+
+3. Keep future algorithm comparison possible.
+   - The design should make it possible to add more planners later.
+   - Avoid hardcoding LaCAM0 deeply into SimulationCore if possible.
+
+4. Support lifelong simulation.
+   - Simulation may run indefinitely.
+   - max_timesteps is optional, not mandatory.
+   - Entry and exit are based on pace/rates.
+   - There may be new cars added over time.
+   - Parked cars may later become active and leave.
+
+5. Handle LaCAM0 correctly.
+   - LaCAM0 should plan active moving agents as a MAPF batch.
+   - Inactive parked cars should likely be treated as static obstacles in the .map.
+   - Active cars should be represented as agents in the .scen file.
+   - LaCAM0 result should be parsed and converted back into the internal car path/state representation.
+   - LaCAM0 does not need the ReservationTable in the same way Priority Planner does.
+
+6. Avoid unnecessary global replanning every timestep.
+   - Use event-driven replanning or rolling horizon if appropriate.
+   - Replan when cars enter, cars request exit, paths expire, or a configured replan interval is reached.
+   - The exact policy should be designed carefully.
+
+7. Keep frontend/backend communication compatible with Phase 1.
+   - WebSocket live updates should remain the main communication method.
+   - Frontend should not know the internal details of LaCAM0.
+   - Frontend receives car positions/status/stats in the same general STEP message structure regardless of algorithm.
+
+What I need from you now
+========================
+Please inspect the codebase and the files mentioned above, then create a new architecture/design document.
+Do not implement code yet.
+
+The new design document should include:
+
+1. What Phase 1 currently implemented, based on the actual code.
+2. What parts of the current architecture are still too coupled to Priority Planner.
+3. A recommended modular architecture for supporting both Priority Planner and LaCAM0.
+4. Whether SimulationCore should be split, abstracted, replaced by a factory, or refactored.
+5. Exact backend files/classes that need to be modified.
+6. Exact new backend files/classes that should be created.
+7. Exact frontend changes needed for algorithm selection, if not already done.
+8. How LaCAM0 should be called on Windows based on windows_setup.txt and lacam_api.txt.
+9. How to generate .map and .scen files from the parking lot simulation state.
+10. How to parse LaCAM0 result output and map agent indices back to car IDs.
+11. How to handle planner failure/timeout without breaking the live simulation.
+12. How to keep Priority Planner and ReservationTable intact.
+13. A step-by-step implementation order.
+14. Risks and open questions.
+
+Important implementation instruction
+====================================
+Do not implement yet.
+First produce the plan/design only.
+After I review and approve the design, we will implement it step by step.
+
+Recommended implementation style after approval
+===============================================
+When implementation begins, do not make all changes at once.
+Start with a small safe phase, such as:
+- create planner/simulation abstractions
+- keep Priority Planner working through the abstraction
+- verify existing behavior still works
+Then add LaCAM0 adapter and test with a tiny scenario.
+Then integrate it into the live/lifelong WebSocket simulation.
+
+Tone / output
+=============
+Be concrete and codebase-aware.
+Do not give generic advice only.
+Inspect the actual files, classes, and current Phase 1 implementation before deciding.

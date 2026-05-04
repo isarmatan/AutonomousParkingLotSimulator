@@ -1,0 +1,395 @@
+================================================================================
+  LaCAM0 MODULAR INTEGRATION — DESIGN DOCUMENT
+  Autonomous Parking Lot Simulator  |  May 2026
+================================================================================
+
+────────────────────────────────────────────────────────────────────────────────
+1. WHAT PHASE 1 CURRENTLY IMPLEMENTED (from actual code)
+────────────────────────────────────────────────────────────────────────────────
+
+All Phase 1 infrastructure is complete and working:
+
+Backend:
+  simulation_session.py   — async run loop, pause/resume/stop/reset via bool flags,
+                            run_in_executor for non-blocking step(), INIT/STEP/STATUS/ERROR
+  simulation_manager.py   — module-level dict registry (add/get/remove)
+  ws_router.py            — WebSocket endpoint, control dispatch, disconnect handling
+  api_app.py              — ws_router registered ✓
+  simulation_router.py    — POST /simulation/start, reads req.algorithm, creates session
+  simulation_dtos.py      — LiveSimulationRequest (with algorithm field), SessionInitResponse
+  base_planner.py         — BasePlanner ABC: plan_for_car(), cancel_plan(), reservation_table
+  priority_planner_adapter.py — thin wrapper, conforms to BasePlanner
+  planner_manager.py      — create_planner() factory: "priority" works, "lacam0" raises ValueError
+
+Frontend:
+  SimulationConfig.tsx    — algorithm state, SelectRow component, saves to sessionStorage,
+                            but options={["priority"]} — needs "lacam0" added (ONE line)
+  Simulation.tsx          — full WebSocket flow: POST /start → WS → INIT/STEP/STATUS/ERROR,
+                            pause/resume/stop/reset buttons all working ✓
+
+
+────────────────────────────────────────────────────────────────────────────────
+2. CURRENT COUPLING TO PRIORITY PLANNER (specific lines in simulation_core.py)
+────────────────────────────────────────────────────────────────────────────────
+
+SimulationCore directly accesses self.planner.reservation_table in 9 places.
+These serve two distinct concerns:
+
+  STATIC CELL TRACKING (needed by both planners):
+    _initialize_cars()  line 91:  reservation_table.reserve_goal(pos, ...)
+    _wake_parked_car()  line 129: reservation_table.unreserve_goal(cx, cy, ...)
+    _advance_cars()     line 396: reserve_goal(gx, gy, ...)  after car parks
+    _advance_cars()     line 462: reserve_goal(...) same, in alternate branch
+
+  SPACETIME PATH RESERVATION (only needed by Priority Planner):
+    _advance_cars()     line 396: unreserve_path(completed_path) after car parks
+    _advance_cars()     line 410: unreserve_path(completed_path) after car exits
+    _advance_cars()     line 462: unreserve_path(...) in alternate branch
+    _get_free_entry()   line 512: is_cell_free(x, y, t) — checks 20 steps ahead
+    _get_free_road_cell() line 543: is_cell_free(x, y, t)
+
+  PER-CAR PLANNING LOOP (incompatible with LaCAM0's batch model):
+    _advance_cars() lines 218-271: loops plan_for_car() per car without path
+
+KEY INSIGHT: The ReservationTable has two parts:
+  - static_cells (set of (x,y)): used by reserve_goal/unreserve_goal
+  - vertex_reservations (set of (x,y,t)): used by reserve_path
+
+For LaCAM0, vertex_reservations stays empty (LaCAM0 doesn't register paths there).
+So is_cell_free() for LaCAM0 only checks static_cells — which is correct:
+it blocks spawning only on cells occupied by parked cars. No change needed.
+
+
+────────────────────────────────────────────────────────────────────────────────
+3. RECOMMENDED MODULAR ARCHITECTURE
+────────────────────────────────────────────────────────────────────────────────
+
+DECISION: Option 1 — One SimulationCore with pluggable planner strategy.
+
+Rationale: The simulation lifecycle (arrivals, exits, collision resolution,
+car state machine) is 100% identical for both planners. Only the planning
+mechanism differs. Splitting SimulationCore would duplicate ~400 lines.
+
+The changes are minimal — two additions to BasePlanner and two small guards
+in SimulationCore.
+
+3A. Extend BasePlanner with two new members:
+
+  @property
+  def uses_batch_planning(self) -> bool:
+      return False   # Priority Planner returns False (default)
+                     # LaCAM0 returns True (override)
+
+  def replan_all(self, active_cars, current_time, parked_positions) -> bool:
+      """Batch-plan for all active cars. Default: loop plan_for_car()."""
+      # Default implementation used by Priority Planner
+      ok = False
+      for car in active_cars:
+          ok = self.plan_for_car(car, current_time) or ok
+      return ok
+
+3B. SimulationCore.step() — add batch replan hook:
+
+  def step(self):
+      self._cleanup_exited_cars()
+      self._process_parked_car_exits()
+      if self.planner.uses_batch_planning:           # NEW (3 lines)
+          parked_pos = {self.car_positions[cid] for cid in self.parked_cars}
+          self.planner.replan_all(list(self.active_cars.values()), self.time, parked_pos)
+      self._advance_cars()
+      self._maybe_poisson_arrival()
+      self.time += 1
+
+3C. SimulationCore._advance_cars() — guard the per-car planning loop:
+
+  # Existing loop (lines 218-271) becomes:
+  if not self.planner.uses_batch_planning:
+      cars_needing_plan = [c for c in self.active_cars.values() if not c.has_path()]
+      # ... existing sort and plan_for_car loop (no other changes) ...
+
+3D. LaCAM0PlannerAdapter.cancel_plan(car):
+  Just calls car.clear_path(). Does NOT call reservation_table.unreserve_path()
+  because LaCAM0 never added the path to the reservation table.
+  The calls to reservation_table.unreserve_path() in _advance_cars() are safe
+  no-ops on an empty vertex_reservations set.
+
+3E. Path format conversion:
+  LaCAM0 returns [(x,y), (x,y), ...] starting at t=0.
+  Convert to internal format: [(x, y, current_time + i) for i, (x,y) in enumerate(raw)]
+  Truncate to planning_horizon: path[:self.planning_horizon]
+
+
+────────────────────────────────────────────────────────────────────────────────
+4. FILES TO MODIFY
+────────────────────────────────────────────────────────────────────────────────
+
+backend/planning/base_planner.py
+  + Add: uses_batch_planning property (default False)
+  + Add: replan_all() method (default per-car loop)
+
+backend/core/simulation_core.py
+  + step(): 3-line batch replan hook
+  + _advance_cars(): 1-line guard on per-car planning loop
+
+backend/planning/planner_manager.py
+  + Import LaCAM0PlannerAdapter
+  + Add elif branch: algorithm == "lacam0" → return LaCAM0PlannerAdapter(...)
+
+frontend/src/pages/SimulationConfig.tsx  (line 120)
+  - options={["priority"]}
+  + options={["priority", "lacam0"]}
+
+
+────────────────────────────────────────────────────────────────────────────────
+5. NEW FILES TO CREATE
+────────────────────────────────────────────────────────────────────────────────
+
+backend/planning/lacam0_file_generator.py
+  class LaCAM0FileGenerator:
+    generate_map(grid, parked_positions: set, output_path: str) -> None
+    generate_scen(plannable_cars, map_filename, W, H, output_path) -> None
+
+backend/planning/lacam0_result_parser.py
+  class LaCAM0ResultParser:
+    parse(result_path: str) -> Optional[Dict[int, List[Tuple[int,int]]]]
+
+backend/planning/lacam0_planner_adapter.py
+  class LaCAM0PlannerAdapter(BasePlanner):
+    uses_batch_planning = True
+    replan_all(...) -> bool    ← main entry point
+    plan_for_car(...)          ← fallback: calls replan_all with single car
+    cancel_plan(car)           ← car.clear_path() only
+    reservation_table          ← plain ReservationTable (static_cells only used)
+
+
+────────────────────────────────────────────────────────────────────────────────
+6. HOW LaCAM0 IS CALLED ON WINDOWS (from WINDOWS_SETUP.txt)
+────────────────────────────────────────────────────────────────────────────────
+
+LaCAM0 is compiled natively on Windows with MinGW. No WSL involved.
+Executable: LACAM0_DIR\build\main.exe
+Output: LACAM0_DIR\build\result.txt  (fixed path, relative to cwd=LACAM0_DIR)
+
+Configuration:
+  lacam0_dir    = os.environ.get("LACAM0_DIR", r"C:\path\to\lacam")
+  lacam0_exe    = os.path.join(lacam0_dir, "build", "main.exe")
+  lacam0_result = os.path.join(lacam0_dir, "build", "result.txt")
+
+Subprocess call:
+  import threading
+  _lacam0_lock = threading.Lock()   # result.txt is fixed path — serialize calls
+
+  with _lacam0_lock:
+      # Write temp files
+      with tempfile.TemporaryDirectory() as tmpdir:
+          map_path  = os.path.join(tmpdir, "parking.map")
+          scen_path = os.path.join(tmpdir, "parking.scen")
+          generator.generate_map(grid, parked_positions, map_path)
+          generator.generate_scen(plannable_cars, "parking.map", W, H, scen_path)
+          try:
+              r = subprocess.run(
+                  [lacam0_exe, "-i", scen_path, "-m", map_path,
+                   "-N", str(len(plannable_cars)), "-v", "0"],
+                  cwd=lacam0_dir,
+                  capture_output=True,
+                  timeout=10,
+              )
+          except subprocess.TimeoutExpired:
+              return False
+          if r.returncode != 0:
+              return False
+      paths = parser.parse(lacam0_result)
+
+NOTE: If LaCAM0 supports -o flag (run .\build\main.exe --help to verify),
+use it to write to a unique file per call. This removes the need for the lock.
+
+
+────────────────────────────────────────────────────────────────────────────────
+7. .map AND .scen FILE GENERATION
+────────────────────────────────────────────────────────────────────────────────
+
+.map encoding:
+  WALL                               → '@'
+  ROAD, ENTRY, EXIT                  → '.'
+  PARKING, spot free or car moving   → '.'
+  PARKING, spot occupied by parked car (in parked_positions) → '@'
+
+  Active (moving) cars are NOT added as obstacles. LaCAM0 plans them as agents.
+  parked_positions = {car_positions[cid] for cid in parked_cars}
+
+  Header:
+    type octile
+    height {H}
+    width {W}
+    map
+    {row y=0: W chars}
+    ...
+
+.scen encoding:
+  plannable_cars = sorted(active_cars, key=lambda c: c.car_id, filtered by c.goal is not None)
+  version 1
+  0\t{map_filename}\t{W}\t{H}\t{start_x}\t{start_y}\t{goal_x}\t{goal_y}\t0.0
+  (one line per car in plannable_cars order)
+
+Agent index i in result.txt maps to plannable_cars[i].
+
+
+────────────────────────────────────────────────────────────────────────────────
+8. PARSING LaCAM0 RESULT.TXT
+────────────────────────────────────────────────────────────────────────────────
+
+From the example result.txt in "understand lacam0/":
+  solved=1
+  solution=
+  0:(11,6),(29,9),(9,0),
+  1:(11,7),(29,10),(10,0),
+  ...
+
+Parse steps:
+  1. Check "solved=1" — if not, return None
+  2. Find line "solution=" — everything after is per-timestep data
+  3. For each line "T:(x0,y0),(x1,y1),...":
+       T = int before ":"
+       positions = re.findall(r'\((\d+),(\d+)\)', rest)
+       for i, (x, y) in enumerate(positions): paths[i].append((int(x), int(y)))
+  4. Return {i: [(x,y), ...] for i in range(N)}
+
+In the adapter, convert to absolute-time format and truncate:
+  car_path = [(x, y, current_time + t_offset)
+              for t_offset, (x, y) in enumerate(paths[agent_i])]
+  car.set_path(car_path[:planning_horizon])
+
+
+────────────────────────────────────────────────────────────────────────────────
+9. FAILURE / TIMEOUT HANDLING
+────────────────────────────────────────────────────────────────────────────────
+
+On any failure (timeout, non-zero exit, solved=0, missing result.txt):
+  - Log a warning
+  - Return False from replan_all()
+  - Cars without paths wait in place — simulation continues normally
+  - No crash, no exception propagated to SimulationSession
+
+Optional: In SimulationSession._run_loop(), detect False return from replan
+(needs a small hook) and send:
+  {"type": "WARNING", "message": "LaCAM0 planning failed — cars waiting"}
+Frontend can show a soft banner without interrupting the simulation.
+
+
+────────────────────────────────────────────────────────────────────────────────
+10. HOW PRIORITY PLANNER AND ReservationTable ARE KEPT INTACT
+────────────────────────────────────────────────────────────────────────────────
+
+Zero changes to:
+  priority_planner.py, priority_planner_adapter.py, reservation_table.py,
+  single_agent_planner.py, car.py, parking_manager.py
+
+For Priority Planner:
+  uses_batch_planning → False (default)
+  → Batch replan hook in step() is skipped
+  → Per-car planning loop in _advance_cars() is NOT guarded out
+  → Behavior is 100% identical to current
+
+For ReservationTable:
+  LaCAM0 adapter holds a ReservationTable but only reserve_goal/unreserve_goal
+  are called by SimulationCore (via the planner's reservation_table property).
+  vertex_reservations stays empty. unreserve_path() is a no-op on empty set.
+  No structural change to ReservationTable.
+
+
+────────────────────────────────────────────────────────────────────────────────
+11. STEP-BY-STEP IMPLEMENTATION ORDER
+────────────────────────────────────────────────────────────────────────────────
+
+Step 1: Extend base_planner.py
+  Add uses_batch_planning property (default False).
+  Add replan_all() with default per-car loop implementation.
+  Test: existing Priority Planner tests still pass.
+
+Step 2: Create lacam0_file_generator.py
+  Implement generate_map() and generate_scen().
+  Unit test with the 32x32 map from "understand lacam0/" folder:
+    - Load the .map file, verify output matches character-for-character.
+  Unit test scen generation with 2 mock cars.
+
+Step 3: Create lacam0_result_parser.py
+  Implement parse() using result.txt from "understand lacam0/":
+    - Verify agent 0 path starts at (11,6) and ends at (7,18).
+    - Verify agent 1 path starts at (29,9) and ends at (1,16).
+    - Verify agent 2 path starts at (9,0) and ends at (13,21).
+    - Verify parse returns None for a synthetic solved=0 file.
+
+Step 4: Create lacam0_planner_adapter.py
+  Wire together file_generator + subprocess + result_parser.
+  Set uses_batch_planning = True.
+  Implement replan_all(), cancel_plan(), plan_for_car(), reservation_table.
+  Manual test: run with tiny parking lot, print paths.
+
+Step 5: Modify planner_manager.py
+  Add LaCAM0 branch in create_planner().
+  Set LACAM0_DIR from env var with clear error message if missing.
+
+Step 6: Modify simulation_core.py
+  Add batch replan hook in step() (3 lines).
+  Guard per-car loop in _advance_cars() (1 line).
+  Test: Priority Planner simulation still produces same behavior.
+
+Step 7: Modify SimulationConfig.tsx
+  Add "lacam0" to options array (1 line).
+
+Step 8: End-to-end test
+  Run with LaCAM0 on a small parking lot.
+  Verify cars move, reach goals, stats update correctly.
+  Verify Priority Planner still works after all changes.
+
+Step 9: Verify LACAM0_DIR env var setup
+  Document clearly: user must set LACAM0_DIR before starting the backend.
+  Example: set LACAM0_DIR=C:\Users\user\lacam && uvicorn api_app:app
+
+
+────────────────────────────────────────────────────────────────────────────────
+12. RISKS AND OPEN QUESTIONS
+────────────────────────────────────────────────────────────────────────────────
+
+R1. result.txt fixed output path
+  Risk: LaCAM0 always writes to LACAM0_DIR\build\result.txt.
+  Mitigation: threading.Lock() serializes calls. OR verify if -o flag exists
+  (run .\build\main.exe --help) and use it for unique output files.
+
+R2. LaCAM0 subprocess latency
+  The default step_delay_ms is 100ms. LaCAM0 replanning should complete well
+  under 100ms for parking lot sizes (<100 agents). If not, increase timeout.
+  Since LaCAM0 runs in a thread pool (run_in_executor), it never blocks WS.
+
+R3. Cars with no goal in .scen
+  If a car has no goal (assign_goal() returned None), skip it in .scen.
+  It will not get a path. SimulationCore handles pathless cars gracefully.
+
+R4. LaCAM0 path length vs planning_horizon
+  LaCAM0 solves to completion. Paths may be much longer than planning_horizon.
+  Truncate to planning_horizon in adapter. Cars will request new paths when
+  their current path expires — triggering the next replan call.
+
+R5. Parked cars that arrived via Poisson
+  Current code: only initial_cars enter parked_cars dict initially.
+  Arriving cars that successfully park also enter parked_cars (line 402).
+  So exit_rate applies to ALL parked cars already — this is correct behavior.
+
+OQ1. Does LaCAM0 support -o flag?
+  Run: .\build\main.exe --help
+  If yes: use -o <unique_temp_path> per call. Remove threading.Lock().
+
+OQ2. Should replanning happen every step or only on events?
+  Current Priority Planner: plans per car when it needs a path (on-demand).
+  For LaCAM0: replan_all() is called every step via the hook (when
+  uses_batch_planning=True). This is safe — LaCAM0 is fast.
+  Future optimization: add a "needs_replan" flag, only call on events.
+
+OQ3. Frontend WARNING message type
+  Frontend currently handles: INIT, STEP, STATUS, ERROR.
+  Adding WARNING requires a small frontend handler (show soft banner).
+  Low priority — simulation works without it.
+
+================================================================================
+END OF DESIGN DOCUMENT
+================================================================================

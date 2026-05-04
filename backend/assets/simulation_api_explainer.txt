@@ -1,0 +1,120 @@
+Simulation API Explainer
+========================
+
+This document explains the Simulation API endpoint, which is the core engine of the application.
+It allows the frontend to trigger a multi-agent pathfinding simulation and receive the full execution trace.
+
+Endpoint
+--------
+`POST /simulation/run`
+
+Concept
+-------
+The simulation is "stateless" from the API's perspective. You send the entire configuration (grid + rules), and the backend runs the simulation from T=0 to T=MaxSteps. It then returns the entire history of moves.
+
+There are two ways to define the grid:
+1. **Generate**: Create a new random grid on the fly.
+2. **Load**: Use a previously saved grid from the database.
+
+Payload Options
+---------------
+
+### Option A: Generating a New Grid
+Use this when the user wants to start fresh with a random layout.
+
+```json
+{
+  "source": "generate",
+  // Grid Dimensions
+  "width": 20,
+  "height": 20,
+  
+  // Generation Rules
+  "rules": {
+    "num_entries": 2,       // Number of entry points
+    "num_exits": 2,         // Number of exit points
+    "num_parking_spots": 15 // Total parking spots
+  },
+  
+  // Simulation Parameters
+  "planning_horizon": 50,   // How far ahead cars plan (A* depth)
+  "arrival_lambda": 0.5,    // Poisson rate of new cars (0.0 - 1.0)
+  "max_steps": 500,         // Duration of simulation
+  "initial_parked_cars": 5, // Cars already parked at T=0
+  "initial_active_cars": 0  // Cars already driving at T=0
+}
+```
+
+### Option B: Loading a Saved Grid
+Use this when the user selects a map they created in the Editor.
+
+```json
+{
+  "source": "load",
+  // The ID comes from the GET /editor/saved endpoint
+  "parkingLotId": "d290f1ee-6c54-4b01-90e6-d701748f0851",
+  
+  // Simulation Parameters (Same as above)
+  "planning_horizon": 50,
+  "arrival_lambda": 0.5,
+  "max_steps": 500,
+  "initial_parked_cars": 5,
+  "initial_active_cars": 0
+}
+```
+
+Response Structure
+------------------
+The response contains everything needed to visualize the simulation.
+
+```json
+{
+  // The Static Map
+  "grid": {
+    "width": 20,
+    "height": 20,
+    "cells": [
+      { "x": 0, "y": 0, "type": "WALL", "metadata": {} },
+      { "x": 1, "y": 0, "type": "ROAD", "metadata": {} },
+      { "x": 5, "y": 5, "type": "PARKING", "metadata": { "parking_id": "P1" } }
+      // ... all cells
+    ]
+  },
+  
+  // The Dynamic Trace
+  "timesteps": [
+    {
+      "t": 0,
+      "cars": {
+        "car_1": [1, 0], // Car 1 is at (1,0)
+        "car_2": [5, 5]  // Car 2 is at (5,5)
+      }
+    },
+    {
+      "t": 1,
+      "cars": {
+        "car_1": [1, 1], // Car 1 moved
+        "car_2": [5, 5]  // Car 2 stayed
+      }
+    }
+    // ... up to max_steps
+  ],
+  
+  // Statistics
+  "meta": {
+    "total_steps": 500,
+    "total_cars": 12,
+    "total_parked": 10,
+    "total_failed_plans": 0
+  }
+}
+```
+
+Frontend Logic Recommendations
+------------------------------
+1. **Fetching**: Show a loading spinner while waiting for the POST request (simulation can take 1-5 seconds depending on complexity).
+2. **Rendering Map**: Draw the `grid` once as a background layer.
+3. **Rendering Cars**: 
+   - Use a slider or play button to control the current time `t`.
+   - Look up `timesteps[t]`.
+   - Iterate over the `cars` object and draw a car sprite at each coordinate.

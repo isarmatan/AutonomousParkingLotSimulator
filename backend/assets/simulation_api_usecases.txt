@@ -1,0 +1,118 @@
+Simulation API – Frontend ↔ Backend Examples
+
+Base URL
+- Local dev: http://localhost:8000
+- Router prefix: /simulation
+
+Notes
+- The backend runs the full simulation in one request (up to max_steps).
+- It returns the grid layout and a list of timesteps showing car positions.
+- This corresponds to "Solving the MAPF problem" and returning the trace.
+
+========================================
+USE CASE 1: Run Simulation with Generated Grid
+========================================
+Goal
+- User configures a new random parking lot and starts simulation.
+
+Request
+POST /simulation/run
+Content-Type: application/json
+
+{
+  "source": "generate",
+  "width": 20,
+  "height": 10,
+  "rules": {
+    "num_entries": 2,
+    "num_exits": 2,
+    "num_parking_spots": 10
+  },
+  "planning_horizon": 50,
+  "arrival_lambda": 0.5,
+  "max_arriving_cars": 20,
+  "initial_parked_cars": 2,
+  "initial_active_cars": 1,
+  "max_steps": 500
+}
+
+Response (200)
+{
+  "grid": {
+    "width": 20,
+    "height": 10,
+    "cells": [
+      {"x": 0, "y": 0, "type": "WALL", "metadata": {}},
+      {"x": 1, "y": 0, "type": "WALL", "metadata": {}},
+      ...
+    ]
+  },
+  "timesteps": [
+    {
+      "t": 0,
+      "cars": {
+        "1": [3, 5],
+        "2": [7, 1]
+      }
+    },
+    {
+      "t": 1,
+      "cars": {
+        "1": [4, 5],
+        "2": [7, 2]
+      }
+    },
+    ...
+  ],
+  "meta": {
+    "total_steps": 120,
+    "total_cars": 22,
+    "total_parked": 20,
+    "total_failed_plans": 0
+  }
+}
+
+========================================
+USE CASE 2: Run Simulation with Saved Parking Lot
+========================================
+Goal
+- User selects a premade parking lot (from the DB) and runs simulation on it.
+
+Request
+POST /simulation/run
+Content-Type: application/json
+
+{
+  "source": "load",
+  "parkingLotId": "b9b4c5c9-8b78-4e72-8c4a-7b3f2a0a6b0d",
+  "planning_horizon": 100,
+  "arrival_lambda": 0.8,
+  "max_arriving_cars": 50,
+  "initial_parked_cars": 5,
+  "max_steps": 1000
+}
+
+Response (200)
+{
+  "grid": { ... },
+  "timesteps": [ ... ],
+  "meta": { ... }
+}
+
+========================================
+Error Cases
+========================================
+
+1) Parking Lot Not Found
+Request: source="load", parkingLotId="invalid-id"
+Response (404)
+{
+  "detail": "Parking lot not found"
+}
+
+2) Missing Generation Params
+Request: source="generate", missing rules/width/height
+Response (422)
+{
+  "detail": "Width, height, and rules are required for 'generate' source"
+}

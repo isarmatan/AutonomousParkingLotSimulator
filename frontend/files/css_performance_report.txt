@@ -1,0 +1,38 @@
+CSS Performance Analysis & Recommendations
+
+The "non-smooth scroll" and general sluggishness are likely caused by excessive use of **filters, backdrop-filters, and complex gradients**. These features are computationally expensive and force the browser to constantly repaint large areas of the screen during scrolling.
+
+1. **Backdrop-Filter Overload (Critical)**
+   - **Issue:** The property `backdrop-filter: blur(...)` is used on multiple elements (`.searchInput`, `.kpiCard`, `.statsTableContainer.glass`, `.appLayout__header`).
+   - **Impact:** This is one of the most expensive CSS properties. The browser must calculate the blur for every pixel behind these elements in real-time as you scroll.
+   - **Recommendation:** 
+     - Remove `backdrop-filter` from scrolling elements like `.kpiCard` and `.statsTableContainer`.
+     - Replace it with a slightly more opaque background color (e.g., `rgba(10, 25, 45, 0.9)` instead of `0.76`).
+     - Keep it ONLY on sticky elements like the Header, or remove it entirely if performance is paramount.
+
+2. **Large Fixed Blurred Backgrounds**
+   - **Issue:** `AppLayout.css` defines `.appLayout__cinematicBg` with `filter: blur(18px)` covering the entire screen (`inset: 0`).
+   - **Impact:** Repainting this huge blurred layer during composites can be slow, especially on high-resolution displays.
+   - **Recommendation:** Pre-blur the image in an image editor (Photoshop/Figma) and serve it as a static JPG/PNG. This removes the need for the browser to calculate the blur filter every frame.
+
+3. **Complex Gradients & Glows**
+   - **Issue:** `.statsPage::before` and `.searchGlow` use multiple overlapping `radial-gradient`s combined with `filter: blur(...)`.
+   - **Impact:** Rendering multiple gradients with blurs requires significant GPU resources.
+   - **Recommendation:** 
+     - Simplify the background to a single CSS gradient or a static image.
+     - Remove the `::before` pseudo-element on `.statsPage` or reduce its size/complexity.
+
+4. **Box Shadows & Radius**
+   - **Issue:** Large blur radii on box-shadows (e.g., `90px` blur on `.statsPage`) are expensive to render.
+   - **Recommendation:** Reduce the blur radius of shadows (e.g., to `20px` or `30px`) or use simpler, tighter shadows.
+
+5. **Table Row Hover Effects**
+   - **Issue:** `.statsTable tbody tr:hover td` applies a linear gradient on hover.
+   - **Impact:** On a large table, triggering this layout/paint change on mouse movement can cause stuttering.
+   - **Recommendation:** Use a simple solid color (e.g., `rgba(255,255,255,0.05)`) for row hover states instead of a gradient.
+
+**Summary of Proposed Fixes:**
+1. Disable `backdrop-filter` on cards and table containers.
+2. Remove `filter: blur(...)` from the global background image.
+3. Simplify background gradients.
+4. Optimize hover effects.
