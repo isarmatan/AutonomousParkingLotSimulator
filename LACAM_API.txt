@@ -1,0 +1,287 @@
+LaCaM - Algorithm Reference for MAPF Integration
+==================================================
+Paper: "LaCAM: Search-Based Algorithm for Quick Multi-Agent Pathfinding" (AAAI-23)
+Repo:  https://github.com/Kei18/lacam
+
+
+=============================
+ HOW THE ALGORITHM WORKS
+=============================
+
+MAPF Problem
+------------
+Given: a grid map, N agents, each with a start cell and a goal cell.
+Find:  collision-free paths for all agents from starts to goals.
+Constraints: no two agents on the same cell at the same time,
+             no two agents swapping positions in one timestep.
+
+LaCaM is NOT optimal (does not minimize makespan or sum-of-costs),
+but it is COMPLETE (always finds a solution if one exists) and very fast
+even for large numbers of agents.
+
+
+Two-Level Search
+----------------
+LaCaM uses a two-level search structure:
+
+  HIGH LEVEL  -- Depth-first search over "Nodes"
+                 Each Node holds a full Configuration (position of every agent).
+                 The search starts from the start configuration and tries to reach
+                 the goal configuration by expanding one timestep at a time.
+
+  LOW LEVEL   -- For each high-level Node, a "search tree" of Constraints is
+                 explored lazily. A Constraint specifies forced next-moves for
+                 a subset of agents. The low level uses PIBT (Priority Inheritance
+                 with Backtracking) to fill in moves for the remaining agents.
+
+PIBT (Priority Inheritance with Backtracking)
+---------------------------------------------
+PIBT is the core single-step planner inside LaCaM.
+Each agent is given a priority (higher = moves first).
+Agents move greedily toward their goal using a precomputed BFS distance table.
+When an agent's preferred cell is occupied by a lower-priority agent,
+it "inherits" priority and forces that agent to move out of the way.
+If no valid move exists, the step fails and LaCaM backtracks via lazy constraints.
+
+Priority Update
+---------------
+Agent priorities are updated at each timestep:
+- If an agent has NOT reached its goal: priority increments by 1 (urgency grows).
+- If an agent HAS reached its goal:     priority drops to its fractional part
+  (it steps aside for others).
+
+Distance Table
+--------------
+At startup, a lazy BFS distance table is computed for each agent's goal.
+D[agent_i][vertex_v] = shortest path distance from vertex v to agent i's goal.
+This table is filled on-demand (not all at once) to save time.
+
+Summary of guarantees:
+  - Complete: yes (finds a solution if one exists, within the time limit)
+  - Optimal:  no
+  - Time complexity: fast in practice, scales well to 1000+ agents
+  - Memory: O(N * |V|) for the distance table, O(explored nodes) for search
+
+
+=============================
+ DATA TYPES
+=============================
+
+Vertex
+------
+  struct Vertex {
+    int id;                      // dense index in V (0 .. |V|-1)
+    int index;                   // grid index = width * y + x
+    std::vector<Vertex*> neighbor;  // adjacent passable cells (4-connected)
+  };
+
+  Given a Vertex* v:
+    int x = v->index % graph.width;
+    int y = v->index / graph.width;
+
+Graph
+-----
+  struct Graph {
+    Vertices V;    // all passable vertices (no nullptrs), size = |V|
+    Vertices U;    // all grid cells including walls (nullptrs for walls),
+                   // size = width * height
+    int width;
+    int height;
+  };
+
+  U[y * width + x] == nullptr  -->  wall
+  U[y * width + x] != nullptr  -->  passable, gives you the Vertex*
+
+Config
+------
+  using Config = std::vector<Vertex*>;
+  // Config[i] = current position of agent i (a Vertex*)
+
+Solution
+--------
+  using Solution = std::vector<Config>;
+  // Solution[t]    = configuration at timestep t
+  // Solution[t][i] = position of agent i at timestep t
+  // Solution[0]    = start configuration
+  // Solution.back()= goal configuration (all agents at their goals)
+  // Solution is empty if the algorithm failed (time limit reached)
+
+
+=============================
+ INPUTS
+=============================
+
+Instance  (struct Instance)
+-------------------------------
+The Instance holds the graph, start positions, goal positions, and agent count.
+
+  struct Instance {
+    Graph G;       // the map
+    Config starts; // starts[i] = start Vertex* of agent i
+    Config goals;  // goals[i]  = goal  Vertex* of agent i
+    uint N;        // number of agents
+  };
+
+Three constructors:
+
+  1. From .scen + .map file  (MAPF benchmark format)
+     ------------------------------------------------
+     Instance ins(scen_filename, map_filename, N);
+
+     .map format:  MovingAI grid map (see assets/ for examples)
+     .scen format: tab-separated benchmark scenario file
+                   columns: bucket, map, width, height,
+                            start_x, start_y, goal_x, goal_y, optimal_cost
+     N: how many scenario entries (agents) to load (from the top of the file)
+
+  2. Random starts/goals
+     --------------------
+     std::mt19937 MT(seed);
+     Instance ins(map_filename, &MT, N);
+     // starts and goals are chosen randomly from passable cells
+
+  3. Explicit vertex indexes  (for programmatic use)
+     -------------------------------------------------
+     Instance ins(map_filename,
+                  {start_idx_agent0, start_idx_agent1, ...},
+                  {goal_idx_agent0,  goal_idx_agent1,  ...});
+     // index = width * y + x  (same as Vertex::index)
+
+Validity check:
+  ins.is_valid(verbose)  // returns false if starts/goals are invalid
+                         // verbose=1 prints the reason
+
+solve()  (the main function)
+-------------------------------
+  Solution solve(const Instance& ins,
+                 int verbose = 0,
+                 const Deadline* deadline = nullptr,
+                 std::mt19937* MT = nullptr);
+
+  ins      -- the problem instance (see above)
+  verbose  -- 0 = silent, 1 = print progress to stdout
+  deadline -- time limit (see Deadline below); nullptr = no limit
+  MT       -- random number generator for tie-breaking; nullptr = no randomness
+
+Deadline
+--------
+  Deadline deadline(time_limit_ms);   // e.g. Deadline(5000) for 5 seconds
+  double elapsed = deadline.elapsed_ms();
+  bool   expired = is_expired(&deadline);
+
+
+=============================
+ OUTPUTS
+=============================
+
+Return value of solve():
+  Solution  =  std::vector<Config>  =  std::vector<std::vector<Vertex*>>
+
+  If FAILED (time limit):  solution is EMPTY  -->  check with solution.empty()
+
+  If SUCCESS:
+    solution.size()       -- number of timesteps (makespan + 1)
+    solution[t][i]        -- Vertex* of agent i at time t
+    solution[t][i]->index -- grid index (width * y + x) at time t
+
+Example: extract (x, y) path for agent 0
+  for (int t = 0; t < solution.size(); ++t) {
+      Vertex* v = solution[t][0];
+      int x = v->index % ins.G.width;
+      int y = v->index / ins.G.width;
+  }
+
+Post-processing utilities (from post_processing.hpp):
+  is_feasible_solution(ins, solution, verbose) -- validate the solution
+  get_makespan(solution)                        -- number of timesteps
+  get_sum_of_costs(solution)                   -- sum over agents of path lengths
+  get_sum_of_loss(solution)                    -- sum of timesteps not yet at goal
+  get_path_cost(solution, agent_id)            -- single agent path length
+  make_log(ins, solution, output_file, ...)    -- write result.txt
+
+
+=============================
+ MINIMAL INTEGRATION EXAMPLE
+=============================
+
+#include <lacam.hpp>
+
+int main() {
+    // --- 1. Create instance ---
+    auto MT = std::mt19937(42);
+    Instance ins("my_map.map", &MT, 100);   // 100 agents, random starts/goals
+    if (!ins.is_valid(1)) return 1;
+
+    // --- 2. Solve ---
+    Deadline deadline(10000);               // 10 second time limit
+    Solution sol = solve(ins, 1, &deadline, &MT);
+
+    // --- 3. Handle result ---
+    if (sol.empty()) {
+        // failed to find solution within time limit
+        return 1;
+    }
+
+    int makespan = get_makespan(sol);       // number of timesteps
+    int soc      = get_sum_of_costs(sol);  // sum of costs
+
+    // Iterate over solution
+    for (int t = 0; t <= makespan; ++t) {
+        for (int i = 0; i < (int)ins.N; ++i) {
+            Vertex* v = sol[t][i];
+            int x = v->index % ins.G.width;
+            int y = v->index / ins.G.width;
+            // use (x, y) as needed
+        }
+    }
+
+    return 0;
+}
+
+
+=============================
+ CMAKE INTEGRATION
+=============================
+
+In your project's CMakeLists.txt:
+
+    add_subdirectory(path/to/lacam_repo/lacam)    # the lacam/ subfolder
+    target_link_libraries(your_target lacam)
+
+The lacam static library exports its include path automatically,
+so #include <lacam.hpp> will work with no extra include_directories needed.
+
+NOTE: The lacam library is compiled with -O3 -march=native (see lacam/CMakeLists.txt).
+Your project should use the same compiler (MinGW GCC on Windows) to avoid ABI issues.
+
+
+=============================
+ MAP FILE FORMAT (.map)
+=============================
+
+Standard MovingAI format:
+  type octile
+  height H
+  width W
+  map
+  <H lines of W characters>
+
+Cell characters:
+  '.'  or 'G' = passable (floor)
+  '@'  or 'O' = wall
+  'T'          = tree (wall)
+  'S'          = swamp (treated as passable in this implementation)
+
+Maps available at: https://movingai.com/benchmarks/mapf.html
+
+
+=============================
+ KNOWN LIMITATIONS
+=============================
+
+- Not optimal: solution quality depends on agent priorities and randomness.
+  Running with different seeds can give different (sometimes better) results.
+- No windowed/anytime variant in this repo: the full solution is computed
+  at once, not incrementally.
+- The algorithm assumes a static map (no dynamic obstacles).
+- On Windows, requires the uint fix in utils.hpp (already applied in this repo).

@@ -1,0 +1,187 @@
+Windsurf handoff - LaCAM0 integration planning only
+
+Context
+I am switching to a new Windsurf session, so please use this file as the working update/handoff.
+
+This project is the Autonomous Parking Lot Simulator.
+The system originally worked as an offline simulation:
+1. Frontend sends a simulation configuration to the backend.
+2. Backend calculates all routes up front.
+3. Backend returns a solution JSON.
+4. Frontend visualizes the complete simulation result.
+
+We later created a planning document named architecture_plan_lacam0.
+Please find and read architecture_plan_lacam0 before making assumptions.
+Phase 1 from that plan was implemented: the system was changed into a lifelong system.
+
+Current system direction
+The simulator is now lifelong instead of one-shot/offline.
+The system runs over simulation ticks/steps.
+Cars may enter and leave over time.
+The user configures the pace/rate of entering and exiting cars, plus initial parking-lot conditions.
+There may be more total agents over the lifetime of the simulation than the number of cars visible at t=0.
+
+Current goal
+I now want to integrate LaCAM0 again, but this time correctly from an architectural point of view.
+Do not implement anything yet.
+First, thoroughly scan the project and produce a clear plan.
+After I approve the plan, implementation can begin.
+
+Important previous experience
+LaCAM0 was already successfully integrated in the past, meaning the project was able to call it and receive results.
+However, the performance was extremely underwhelming, especially in scenarios with many cars.
+My current assumption is that the issue was not LaCAM0 itself, but the way my simulation architecture used it.
+
+Main suspicion
+simulation_core is probably too coupled to the previous priority-planner approach.
+The old system was designed around a custom planner/reservation-table style flow.
+Because of that, the current simulation loop may be adding guardrails, validations, per-car movement logic, reservations, goal assignment assumptions, or conflict-handling behavior that made sense for the old priority planner, but may actively interfere with LaCAM0.
+
+LaCAM0 context
+LaCAM0 is a very advanced MAPF algorithm.
+It is much faster and smarter than the original planner that my system was designed around.
+It should return a valid global solution when given a valid MAPF instance.
+Assume LaCAM0 is capable and reliable.
+Do not add unnecessary safety logic around it unless there is a clear reason.
+The existing guardrails in my implementation may be the thing hurting performance or compatibility.
+
+Files to inspect
+Please scan the project thoroughly, especially:
+
+1. architecture_plan_lacam0
+   - This is the previous architecture plan.
+   - Phase 1 was implemented from it.
+   - Use it to understand the intended direction.
+
+2. LACAM_API.txt
+   - This explains the LaCAM0 input/output/types/API.
+   - Use it to understand exactly how LaCAM0 expects maps, agents, starts, goals, scenarios, outputs, and paths.
+
+3. Backend simulation flow
+   Focus especially on:
+   - simulation_core
+   - parking_manager
+   - planner classes
+   - simulation APIs
+   - any algorithm-selection logic
+   - any previous LaCAM0 integration code if it still exists
+
+4. Frontend flow
+   Focus especially on:
+   - simulation.tsx
+   - simulationconfig.tsx
+   - how the selected algorithm is sent to the backend
+   - how lifelong simulation data is consumed
+   - whether the frontend expects full JSON results or live/tick-based updates
+
+What to analyze deeply
+Please fully understand how the current lifelong simulation operates.
+Pay special attention to:
+
+1. simulation_core.step
+   - What happens in one tick?
+   - What state is mutated?
+   - When are cars spawned?
+   - When are cars advanced?
+   - When are goals assigned?
+   - When is the planner called?
+   - Is planning done globally, per car, incrementally, or with local patches?
+
+2. advance cars logic
+   - How does each car move from one timestep to the next?
+   - Is the core validating moves manually?
+   - Are cars blocked by local rules even if the global planner already solved the conflict?
+   - Is there any reservation table or occupancy check that assumes priority-planner behavior?
+   - Are agents forced to wait, replan, or disappear in ways that conflict with LaCAM0 output?
+
+3. parking_manager goal assignment
+   - How entering cars receive parking goals.
+   - How parked cars decide to exit.
+   - How exit goals are represented.
+   - Whether goals can overlap.
+   - Whether parking spots, exits, and active agents are handled consistently.
+   - Whether the same goal can be assigned to multiple active agents.
+
+4. compatibility with LaCAM0
+   - Does the current core treat the planner as a low-level next-move provider?
+   - Does LaCAM0 instead return a global set of paths over a planning horizon?
+   - Is the current core slicing/revalidating/replanning LaCAM0 output in a way that destroys its performance?
+   - Is the system converting the parking lot to the correct MAPF benchmark-style format?
+   - Are starts/goals stable during one LaCAM0 planning call?
+   - Are agents added/removed in a way that makes LaCAM0 solve too frequently?
+
+Main question to answer
+Is the existing simulation_core fundamentally compatible with LaCAM0, or should we create a separate LaCAM0-specific simulation core / execution mode?
+
+My current belief
+I probably need a new simulation core whenever the user selects LaCAM0.
+This is a system feature: the user may select the algorithm.
+So the architecture may need two execution paths:
+
+1. Existing lifelong simulation core for the old/simple priority planner.
+2. New LaCAM0 execution core for LaCAM0, designed around global MAPF batches/planning windows.
+
+What the new LaCAM0 core might need conceptually
+Do not implement yet, but consider this direction:
+
+1. Keep high-level lifelong event generation separate from path planning.
+   - Entry/exit pace decides which agents become active or request service.
+   - ParkingManager handles parking spot assignment and exit decisions.
+   - But once a planning batch is formed, LaCAM0 should own the multi-agent routing solution.
+
+2. Use planning windows or batches.
+   - Instead of calling LaCAM0 every time one car spawns or one car wants to exit, collect events over a planning window.
+   - Build a stable MAPF instance for the current active agents.
+   - Call LaCAM0 once for that batch/window.
+   - Execute the returned paths for several ticks.
+   - Replan only at controlled boundaries or when required.
+
+3. Treat LaCAM0 output as authoritative.
+   - If LaCAM0 returns valid paths, the core should not run old priority-planner conflict prevention on top of it.
+   - The core should mainly execute the path schedule, update car states, and report positions to the frontend.
+   - Only lightweight sanity checks should remain, such as bounds, obstacles, and malformed output checks.
+
+4. Avoid old reservation-table assumptions.
+   - The previous planner may have relied on triplets like (x, y, t) to avoid conflicts.
+   - LaCAM0 already solves MAPF conflicts globally.
+   - Reapplying reservation logic externally may cause waits, deadlocks, unnecessary replanning, or bad performance.
+
+5. Define a clean adapter boundary.
+   Suggested boundary:
+   - Parking lot/internal grid -> LaCAM0 map format
+   - Active cars -> LaCAM0 agents
+   - Current positions -> starts
+   - Assigned parking/exit targets -> goals
+   - LaCAM0 result -> internal path schedule
+   - Internal path schedule -> frontend tick updates
+
+6. Preserve algorithm selection.
+   - The user can choose the algorithm.
+   - The backend should route the simulation request to the correct engine based on selected algorithm.
+   - Priority planner can keep using the existing core if needed.
+   - LaCAM0 should use a core designed for global path schedules.
+
+Expected output from Windsurf now
+Please do not modify code yet.
+First produce a planning document/report that includes:
+
+1. Summary of the current system flow.
+2. Explanation of how simulation_core currently works.
+3. Explanation of how step, advance cars, and parking_manager goal assignment interact.
+4. Identification of priority-planner assumptions embedded in simulation_core.
+5. Explanation of why those assumptions are incompatible or inefficient with LaCAM0.
+6. Proposed LaCAM0-specific architecture.
+7. Recommended integration boundary/API between the simulator and LaCAM0.
+8. Replanning strategy for lifelong behavior.
+9. How frontend/backend flow should work when LaCAM0 is selected.
+10. Concrete implementation phases, but without implementing yet.
+
+Tone / important instruction
+Please be critical and architectural.
+Do not just patch the old integration.
+The goal is to understand whether the previous bad performance came from using LaCAM0 incorrectly inside a simulation core that was designed for a much simpler planner.
+
+Final reminder
+No implementation yet.
+Only scan, analyze, and plan.
+Once I approve the plan, then we can implement.

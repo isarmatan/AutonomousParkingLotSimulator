@@ -1,0 +1,92 @@
+Summary of Fixes for Parking Lot Simulation
+===========================================
+
+1. Collision Avoidance (Vertex Conflicts)
+-----------------------------------------
+File: core/simulation_core.py
+- Problem: The `_handle_new_car` method was manually reserving the car's start position in the ReservationTable *before* calling the planner.
+- Consequence: The A* planner immediately saw the start node as "occupied" (by the car itself) and failed to find a valid path. This created "ghost cars" that existed in the simulation but had no plan, leading to collisions.
+- Fix: Removed the manual reservation line. The `PriorityPlanner` now handles the full reservation (including the start node) only after a successful path is found.
+
+2. Deadlock Resolution (Yielding Behavior)
+------------------------------------------
+Files: planning/single_agent_planner.py, core/simulation_core.py, planning/priority_planner.py
+- Problem: Unplanned (stationary) cars were treated as permanent static obstacles. This caused deadlocks in narrow corridors because agents couldn't plan paths that required "waiting" for a car to move.
+- Fix: 
+    - Updated `single_agent_a_star` to accept an `additional_obstacles` set (unplanned cars) and an `obstacle_persistence` parameter (default 20 steps).
+    - The planner now treats these obstacles as temporary. If the path's time `t` is greater than `start_time + 20`, the cell is considered free.
+    - This allows agents to find paths that yield/wait for traffic to clear.
+
+3. Time Synchronization (Off-by-One Error)
+------------------------------------------
+Files: agents/car.py, core/simulation_core.py
+- Problem: `Car.step()` blindly incremented its path index without checking the global simulation time. This caused cars to move out of sync with their reservations in the `ReservationTable`, leading to collisions where a car was physically in a spot at time `t` but the table reserved it for `t+1` (or vice versa).
+- Fix: 
+    - Updated `Car.step(current_time)` to accept the simulation clock.
+    - Added logic to explicitly match `path[step].time` with `current_time + 1`. The car only moves if the times match exactly.
+    - Updated `SimulationCore._advance_cars` to pass `self.time` to the car.
+
+4. Planning Horizon Bug
+-----------------------
+File: planning/priority_planner.py
+- Problem: The planner was passing the relative `planning_horizon` (e.g., 100 steps) as the absolute `max_time` limit to the A* search.
+- Consequence: Any car arriving after `t=100` would immediately fail to plan because the start time was already greater than `max_time`.
+- Fix: Changed the argument passed to `single_agent_a_star` to be `current_time + self.planning_horizon`.
+
+5. Spawning Safety (Lookahead)
+------------------------------
+File: core/simulation_core.py
+- Problem: Cars could spawn on entry cells that were technically free at `t` but were reserved for `t+1` or `t+2` by incoming cars.
+- Fix: Updated `_get_free_entry` and `_get_free_road_cell` to perform a lookahead check (20 steps). A spawn point is now only valid if it remains free for the near future, preventing immediate collisions upon spawning.
+
+6. Exit Discipline
+------------------
+File: planning/single_agent_planner.py
+- Problem: Cars were using EXIT cells as shortcuts to get to other parts of the parking lot.
+- Fix: Added a constraint in the A* loop: a neighbor cell is skipped if it is of type `EXIT` *unless* it is the specific goal of the agent.
+
+7. Test Suite Stability
+-----------------------
+File: tests/test_simulation_scenarios.py
+- Problem: Infinite loops on deadlock and encoding errors on Windows.
+- Fix: 
+    - Added a `TimeoutError` check (max 2000 steps) to the test runner.
+    - Replaced unicode checkmarks with ASCII text to prevent `UnicodeEncodeError`.
+
+8. Collision Safety Net & Iterative Resolution
+----------------------------------------------
+Files: core/simulation_core.py, agents/car.py
+- Problem: Cars could collide in complex scenarios (like `long_duration_stress`) due to "chain reaction" conflicts where one car blocking another forced a third car to collide.
+- Fix: 
+    - Implemented `Car.peek_at_next_step()` to preview intended moves.
+    - Added an **Iterative Conflict Resolution** loop in `_advance_cars`. It detects vertex conflicts (multiple cars moving to same cell) and edge swaps.
+    - If a conflict is found, the "aggressor" (or both cars in a swap) are forced to yield (stay put).
+    - If a car is forced to yield off-path, its plan is cancelled via `PriorityPlanner.cancel_plan`.
+    - Added a spatial index (`pos_to_cid`) to optimize collision checks from O(N^2) to O(N).
+
+9. Planning Backoff Strategy
+----------------------------
+Files: agents/car.py, core/simulation_core.py
+- Problem: In congested scenarios, cars would retry pathfinding every single tick, causing massive performance degradation when no paths were available.
+- Fix: 
+    - Added `last_plan_fail_time` to `Car` class.
+    - `_advance_cars` now skips planning for a car if it failed within the last 5 ticks.
+
+10. Resource Capacity Logic
+---------------------------
+Files: core/simulation_core.py
+- Problem: The simulation continued to spawn cars even when the parking lot was completely full, leading to guaranteed failures and congestion at entries.
+- Fix: Updated `_maybe_poisson_arrival` to check `parking_manager.free_spots` before creating new cars.
+
+11. Reservation Management
+--------------------------
+Files: planning/reservation_table.py, planning/priority_planner.py
+- Problem: When plans were cancelled, reservations remained, creating "ghost walls".
+- Fix: Added `ReservationTable.unreserve_path()` and `PriorityPlanner.cancel_plan()` to properly clean up state when a car needs to abort its path.
+
+12. Ghost Car Bug (Exit Blocking)
+---------------------------------
+File: core/simulation_core.py
+- Problem: Cars that successfully exited the parking lot were removed from the `active_cars` list but NOT from the `car_positions` dictionary.
+- Consequence: The simulation continued to report these cars as occupying the exit cells. Subsequent cars trying to exit saw the exit as blocked by these "ghost" vehicles and failed to plan a path, causing massive timeouts in evacuation scenarios.
+- Fix: Updated `_advance_cars` to explicitly delete the car's ID from `self.car_positions` when it reaches its goal and has `intent == "EXIT"`.

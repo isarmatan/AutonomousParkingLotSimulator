@@ -1,0 +1,60 @@
+Simulation Explainer:
+
+Main -> soon to be replaced with a controller for future connectivity with frontend.
+
+To generate a simulation we need:
+
+A. Grid generation:
+
+    via auto generator:
+    1) Generating parking lot rules: (number of entrances, number of exits, number of parking spots)
+    2) Grid generation using parking_lot.generator.generate()
+
+    via (future) database that stores user input from Parking Lot Editor component:
+    /--- to be edited----/
+
+B. Cells extraction:
+    purpose: to determine which cells are parking spots, exits or entrances.
+
+    done by using function extract_cells(grid) that's currently defined in Main.
+
+C. ParkingManager (domain logic) initiation requires providing the grid and the extracted cells from the previous step.
+
+D. ReservationTable:
+    purpose: 
+        The ReservationTable is a space-time occupancy index.
+        It answers four questions:
+
+        Is cell (x, y) free at time t?
+
+        Is edge (x1, y1) -> (x2, y2) free at time t?
+
+        Can I reserve a whole path?
+
+        Can I reserve a goal forever?
+    
+E. PriorityPlanner:
+    purpose: A policy layer.
+        
+        Its responsibilities are:
+
+        1) Decide priority order
+
+        2) Call the single-agent planner
+
+        3) Reserve the resulting path
+
+        4) Attach the path to the car
+
+F. Config -> to be replaced with inputs from user when configuring the simulation.
+    will contain: 
+    1) numbers of inactive cars that are occupying parking spots
+    2) number of cars that initially exist in the parking lot at random spots that plan to EXIT.
+    3) number of TOTAL cars that will be entering the parking lot during the simulation in poisson distribution times.
+    4) lambda (for poisson)
+    5) timeout parameter (no solution -> error)
+    6) grid selection (generate/load from DB)
+
+
+The result:
+SimulationCore (this is our simulation) -> it needs all of the above.

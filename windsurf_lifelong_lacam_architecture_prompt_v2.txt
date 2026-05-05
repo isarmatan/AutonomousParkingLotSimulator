@@ -1,0 +1,219 @@
+Hi Windsurf,
+
+I want you to inspect my project carefully and design a smart architecture plan before changing any code.
+
+Important: do not implement anything yet. First, go over the existing codebase and produce a clear step-by-step plan. After I review the plan, I will ask you to implement the changes step by step.
+
+Current project flow
+
+The current simulation flow is offline:
+
+1. Frontend:
+   - The user configures the simulation in SimulationConfig.
+   - Then the user runs the simulation in the Simulation page.
+
+2. Backend:
+   - The simulation API router receives the request.
+   - The backend creates/uses components such as parking_manager, reservation_table, simulation_core, planner, etc.
+   - The current MAPF planner is a priority planner.
+   - The backend calculates the full simulation offline.
+   - The backend returns the entire simulation JSON to the frontend.
+
+3. Frontend display:
+   - The frontend receives the complete JSON.
+   - The frontend displays/animates the already-calculated simulation.
+
+What I want to change
+
+I want to redesign the system into a lifelong simulation.
+
+By lifelong, I mean the simulation can hypothetically run forever. It should not be based on “run simulation -> calculate everything -> return full JSON -> display.” Instead, the simulation should run timestep by timestep and keep updating.
+
+The user may optionally configure a maximum number of timesteps. If a max timestep limit is provided, the simulation stops when it reaches that limit. If no max timestep limit is provided, the simulation can continue running until the user stops it manually.
+
+The user should also be able to configure the pace/rate at which cars enter and leave the parking lot. Entering cars and exiting cars should each have their own configurable rate/pace. For example, the user may configure cars to enter frequently but leave rarely, or the opposite.
+
+The new desired conceptual flow is:
+
+1. Frontend sends simulation configuration.
+2. Backend initializes the simulation state.
+3. Backend starts a timestep loop.
+4. At each timestep:
+   - Existing active cars move according to planned paths.
+   - New cars may enter based on the configured entrance rate.
+   - Parked cars may decide/request to leave based on the configured exit rate.
+   - The backend updates the simulation state.
+   - The backend may call the MAPF planner when new planning/replanning is needed.
+   - The backend sends the current timestep/state update to the frontend.
+5. The frontend displays the simulation live as updates arrive.
+6. The simulation continues until the user stops it or until the optional timestep limit is reached.
+
+Frontend/backend communication
+
+Please analyze the existing frontend/backend communication and recommend the best approach for the new lifelong flow.
+
+I suspect WebSocket may be the right choice because the backend needs to continuously send timestep updates to the frontend while the simulation is running. However, if you think another approach is better, such as Server-Sent Events, polling, or a hybrid approach, explain why.
+
+Please specifically consider:
+
+- How SimulationConfig should send the initial configuration.
+- How the Simulation page should start, pause, resume, stop, and reset a simulation.
+- How live timestep updates should be sent from backend to frontend.
+- Whether the backend should stream every timestep or batch updates every few timesteps.
+- How the frontend should store and render live simulation state.
+- How to handle errors during planning or simulation.
+- How to handle long-running simulations.
+- How to handle optional max timesteps.
+- How to handle a manual stop button from the frontend.
+
+LaCAM0 integration
+
+I want to replace or extend the current priority planner with LaCAM0.
+
+LaCAM0 is a MAPF planner. It solves Multi-Agent Path Finding problems. It is not the whole simulation engine. It should be used as a planner that receives a MAPF problem snapshot and returns paths.
+
+LaCAM0 knows how to handle benchmark-style MAPF problems. Therefore, to use it, the backend needs to generate benchmark-style files:
+
+1. A .map file
+   - This represents the grid/map.
+   - Walkable/drivable cells should be represented as free cells.
+   - Obstacles, walls, blocked cells, and possibly parked inactive cars should be represented as blocked cells.
+
+2. A .scen file
+   - This represents the agents.
+   - Each active moving car should become one MAPF agent.
+   - Each agent needs a start position and a goal position.
+   - Starts should come from the car’s current position.
+   - Goals should come from the car’s current target, such as assigned parking spot, exit, or another intermediate goal.
+
+3. A result/output file
+   - LaCAM0 writes the planned paths into a result file.
+   - The backend needs to parse this file and convert it into the simulation’s internal path format.
+
+Important design point:
+
+LaCAM0 should not control the entire simulation. The SimulationCore should control the timestep loop and global simulation state. LaCAM0 should only be called when path planning or replanning is needed.
+
+Possible planning approach:
+
+- Active moving cars should be sent to LaCAM0 as agents.
+- Parked/inactive cars should usually not be sent as agents. They should usually be treated as obstacles in the .map.
+- The system should avoid calling LaCAM0 for every single timestep if not needed.
+- Replanning can happen when:
+  - A new car enters.
+  - A parked car wants to exit.
+  - A car reaches its current goal.
+  - A path becomes invalid or blocked.
+  - A periodic replanning interval is reached.
+- The system can use a rolling-horizon approach: plan ahead for a limited window, execute some steps, then re-evaluate.
+
+LaCAM0 setup context
+
+I already set up LaCAM0 in WSL Ubuntu and confirmed it works.
+
+There is a folder called:
+
+understand lacam0
+
+Inside that folder, there are example files showing the LaCAM0 map/scenario/result flow:
+
+- map file
+- scen file
+- result file
+
+These files correspond to this command:
+
+./build/main \
+  -i assets/random-32-32-10-random-1.scen \
+  -m assets/random-32-32-10.map \
+  -N 3 \
+  -v 3
+
+Please inspect this folder and use it to understand:
+
+- What the input .map file looks like.
+- What the input .scen file looks like.
+- What LaCAM0 result/output looks like.
+- How the result should be parsed back into the simulation.
+
+I also tested LaCAM0 on WSL Ubuntu with a large benchmark scenario, and it successfully solved 1320 agents quickly. So for real performance testing, I want the architecture to support calling the optimized LaCAM0 executable, not only the old priority planner.
+
+Important architecture goal
+
+Please design the system so the planner can be swapped cleanly.
+
+For example, it would be good to have something like:
+
+- Planner interface / base class
+- PriorityPlannerAdapter for the current planner
+- LaCAM0PlannerAdapter for LaCAM0
+- PlannerManager that decides when to call the planner and which planner to use
+
+This way, the simulation core does not need to know the details of priority planning or LaCAM0 file formats.
+
+Questions I want you to answer in the plan
+
+Please inspect the code and answer:
+
+1. Which frontend files need to change?
+   - For example SimulationConfig and Simulation page.
+
+2. Which backend files need to change?
+   - For example simulation API router, simulation_core, parking_manager, planner classes, reservation_table, etc.
+
+3. What is the best frontend/backend communication architecture for a lifelong simulation?
+   - WebSocket?
+   - Server-Sent Events?
+   - Polling?
+   - Something else?
+
+4. How should the backend timestep loop be structured?
+
+5. How should entering cars be generated according to the configured entrance rate?
+
+6. How should exiting cars be selected/generated according to the configured exit rate?
+
+7. How should active cars be represented?
+
+8. How should parked/inactive cars be represented?
+
+9. How should LaCAM0 be called from the backend?
+   - Especially since LaCAM0 is currently set up in WSL Ubuntu.
+   - Should the backend call it through subprocess?
+   - Should the backend run inside WSL too?
+   - What path/configuration approach is cleanest?
+
+10. How should the backend generate .map and .scen files from the current parking lot state?
+
+11. How should the backend parse LaCAM0 result.txt back into internal car paths?
+
+12. How should we handle replanning?
+
+13. How should we handle planner failure or timeout?
+
+14. How should we avoid recomputing a full global solution every timestep?
+
+15. How should the frontend visualize the simulation while updates stream in?
+
+16. How should pause/resume/stop/reset be handled?
+
+17. What should be implemented first, second, third, etc.?
+
+What I expect from you now
+
+Please do not write code yet.
+
+First produce a detailed architecture plan with:
+
+1. Current flow summary based on the actual code.
+2. Proposed new flow.
+3. Frontend changes.
+4. Backend changes.
+5. New components/classes/modules to add.
+6. Existing components/classes/modules to modify.
+7. LaCAM0 integration strategy.
+8. Communication strategy between frontend and backend.
+9. Step-by-step implementation order.
+10. Risks, assumptions, and open questions.
+
+Please be careful and plan it smartly. I want to review the architecture before allowing implementation.

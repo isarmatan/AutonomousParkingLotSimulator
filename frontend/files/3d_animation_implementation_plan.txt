@@ -1,0 +1,64 @@
+3D Simulation Animation & Integrity Analysis
+
+You are correct that this is entirely a frontend rendering issue. The backend has provided all the data; the frontend is just not "playing it back" smoothly.
+
+Issue 1: Ensuring Every Step is Seen (Fixing "Skipping")
+-------------------------------------------------------
+**The Cause:**
+Currently, the simulation uses `setInterval` with 100ms delay.
+1. `setInterval` is not precise. If the browser is busy rendering a heavy 3D scene (which takes time), the interval callback might be delayed or bunched together.
+2. When the callback fires, it triggers a React State update (`setStepIndex`). React schedules a re-render.
+3. If the re-render takes longer than 100ms, the next interval tick might arrive before the previous frame has finished painting. The browser may drop the visual frame for step X and jump straight to step X+1.
+
+**The Solution: Time-Based Loop**
+Instead of "run this function every 100ms", we switch to "update the scene based on how much time has passed".
+1. We use `requestAnimationFrame` (which syncs with the monitor's refresh rate, usually 60Hz).
+2. We calculate `elapsedTime` since the last frame.
+3. We accumulate this time. When `accumulator > 100ms`, we advance the step.
+4. Crucially, to avoid skipping, we can clamp the update to ensure we don't jump more than 1 step at a time if that's strictly required, OR we accept that if the computer is too slow, we *must* slow down the playback speed rather than skipping steps.
+
+**Difficulty:** Medium
+- Requires refactoring `Simulation.tsx` to remove `setInterval`.
+- Requires adding a "time accumulator" to the state or a ref.
+
+Issue 2: Integrating Animations (Interpolation)
+-----------------------------------------------
+**The Cause:**
+The data is discrete:
+Step 1: Car at [10, 10]
+Step 2: Car at [10, 11]
+The renderer currently only knows how to draw "Step 1" OR "Step 2". It has no concept of "Step 1.5".
+
+**The Solution: Linear Interpolation (Lerp)**
+We need to render the "in-between" states.
+1. The `Simulation3D` component needs to accept a fractional index (e.g., `currentStep = 1.5`).
+2. Inside the component, we identify the two bounding steps:
+   - `Step A` = floor(1.5) = 1
+   - `Step B` = ceil(1.5) = 2
+   - `Progress` = 0.5 (50% of the way)
+3. For every car, we look up its position in Step A and Step B.
+4. We calculate the render position: `CurrentPos = PosA + (PosB - PosA) * Progress`.
+5. This runs at 60 frames per second. The car will smoothly glide from [10, 10] to [10, 11].
+
+**Difficulty:** Medium-High
+- Requires changing `Simulation.tsx` to track a floating-point `simulationTime` instead of an integer `stepIndex`.
+- Requires rewriting `Simulation3D.tsx` to handle looking up two timesteps simultaneously.
+- Need to handle edge cases:
+  - Car exists in Step A but not Step B (Despawning/Exiting).
+  - Car exists in Step B but not Step A (Spawning).
+  - Rotations need to be interpolated intelligently (shortest path around the circle).
+
+Implementation Plan (Recommended Path)
+--------------------------------------
+1. **Modify Parent (Simulation.tsx):**
+   - Replace `setInterval` with a `useFrame` loop (if moving state to R3F) or a custom `requestAnimationFrame` hook.
+   - Store `playbackTime` (float) representing total seconds elapsed in simulation.
+   - `currentStepIndex = floor(playbackTime / stepDuration)`.
+   - `stepProgress = (playbackTime % stepDuration) / stepDuration`.
+
+2. **Modify Child (Simulation3D.tsx):**
+   - Accept `stepIndex` and `stepProgress`.
+   - In the render loop, interpolate positions for all cars.
+   - Update `Car` component to accept position vectors rather than fixed grid coords.
+
+**Estimated Time to Fix:** ~1-2 hours of focused coding.
