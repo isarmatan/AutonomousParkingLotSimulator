@@ -7,6 +7,8 @@ from sqlalchemy.orm import Session
 from core.simulation_core import SimulationCore, SimulationConfig
 from core.lacam0_simulation_core import LaCAM0SimulationCore
 from core.parking_manager import ParkingManager
+from core.lacam0_parking_manager import LaCAM0ParkingManager
+from planning.ghost_exit_manager import GhostExitManager
 from planning import planner_manager
 from planning.reservation_table import ReservationTable
 from planning.lacam0_batch_planner import LaCAM0BatchPlanner
@@ -142,12 +144,6 @@ def start_simulation(req: LiveSimulationRequest, db: Session = Depends(get_db)):
     effective_max_arriving = req.max_arriving_cars if req.max_arriving_cars > 0 else 999_999
 
     def simulation_factory():
-        pm = ParkingManager(
-            grid=grid,
-            parking_cells=parking_cells,
-            exit_cells=exit_cells,
-            entry_cells=entry_cells,
-        )
         cfg = SimulationConfig(
             planning_horizon=req.planning_horizon,
             goal_reserve_horizon=req.goal_reserve_horizon,
@@ -157,13 +153,28 @@ def start_simulation(req: LiveSimulationRequest, db: Session = Depends(get_db)):
             max_arriving_cars=effective_max_arriving,
         )
         if req.algorithm == "lacam0":
+            ghost_mgr = GhostExitManager(grid.width, grid.height, exit_cells)
+            pm = LaCAM0ParkingManager(
+                grid=grid,
+                parking_cells=parking_cells,
+                exit_cells=exit_cells,
+                entry_cells=entry_cells,
+                ghost_exit_manager=ghost_mgr,
+            )
             batch_planner = LaCAM0BatchPlanner()
             return LaCAM0SimulationCore(
                 grid=grid,
                 parking_manager=pm,
                 config=cfg,
                 batch_planner=batch_planner,
+                ghost_exit_manager=ghost_mgr,
             )
+        pm = ParkingManager(
+            grid=grid,
+            parking_cells=parking_cells,
+            exit_cells=exit_cells,
+            entry_cells=entry_cells,
+        )
         rt = ReservationTable()
         planner = planner_manager.create_planner(
             algorithm=req.algorithm,

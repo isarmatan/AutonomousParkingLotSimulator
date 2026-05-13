@@ -46,6 +46,7 @@ class LaCAM0BatchPlanner:
         grid,
         parked_cells: set,
         current_time: int,
+        ghost_exit_manager=None,
     ) -> Optional[Dict[int, List[TimedPosition]]]:
         """
         Run LaCAM0 for all active cars at once.
@@ -72,7 +73,7 @@ class LaCAM0BatchPlanner:
             out_path = os.path.join(tmp_dir, "result.txt")
 
             # --- 1. Write .map ---
-            map_content = generate_map(grid, parked_cells)
+            map_content = generate_map(grid, parked_cells, ghost_exit_manager)
             with open(map_path, "w", newline="\n") as f:
                 f.write(map_content)
 
@@ -91,9 +92,13 @@ class LaCAM0BatchPlanner:
                     return "OOB"
                 return row_str[x]
 
+            if ghost_exit_manager is not None:
+                map_dims = f"{ghost_exit_manager.expanded_W}x{ghost_exit_manager.expanded_H} (expanded from {grid.width}x{grid.height})"
+            else:
+                map_dims = f"{grid.width}x{grid.height}"
             print(
                 f"\n[LaCAM0] ===== t={current_time} replan "
-                f"| map {grid.width}x{grid.height} "
+                f"| map {map_dims} "
                 f"| parked_cells={len(parked_cells)} "
                 f"| candidates={len(plannable)} ====="
             )
@@ -102,12 +107,19 @@ class LaCAM0BatchPlanner:
             for cid, car in sorted(plannable.items()):
                 sx, sy = car.current_position
                 gx, gy = car.goal
-                sc = _cell_char(sx, sy)
-                gc = _cell_char(gx, gy)
+                # Translate to planner coords for map lookup
+                if ghost_exit_manager is not None:
+                    psx, psy = ghost_exit_manager.world_to_planner(sx, sy)
+                    pgx, pgy = ghost_exit_manager.world_to_planner(gx, gy)
+                else:
+                    psx, psy = sx, sy
+                    pgx, pgy = gx, gy
+                sc = _cell_char(psx, psy)
+                gc = _cell_char(pgx, pgy)
                 s_parked = (sx, sy) in parked_cells
                 g_parked = (gx, gy) in parked_cells
-                s_type = grid.get_cell(sx, sy).type.name if grid.in_bounds(sx, sy) else "OOB"
-                g_type = grid.get_cell(gx, gy).type.name if grid.in_bounds(gx, gy) else "OOB"
+                s_type = grid.get_cell(sx, sy).type.name if grid.in_bounds(sx, sy) else "GHOST"
+                g_type = grid.get_cell(gx, gy).type.name if grid.in_bounds(gx, gy) else "GHOST"
                 ok = (sc == ".") and (gc == ".")
                 tag = "OK     " if ok else "BLOCKED"
                 print(
@@ -145,8 +157,16 @@ class LaCAM0BatchPlanner:
                 )
 
             # --- 3. Write .scen for valid agents only ---
+            if ghost_exit_manager is not None:
+                scen_w = ghost_exit_manager.expanded_W
+                scen_h = ghost_exit_manager.expanded_H
+                w2p = ghost_exit_manager.world_to_planner
+            else:
+                scen_w = grid.width
+                scen_h = grid.height
+                w2p = None
             scen_content, idx_to_car_id = generate_scen(
-                valid_plannable, map_path, grid.width, grid.height
+                valid_plannable, map_path, scen_w, scen_h, world_to_planner=w2p
             )
             with open(scen_path, "w", newline="\n") as f:
                 f.write(scen_content)
@@ -169,13 +189,17 @@ class LaCAM0BatchPlanner:
                 )
                 return None
 
-            # --- 4. Convert solution to per-car timed paths ---
+            # --- 4. Convert solution to per-car timed paths (world coords) ---
             paths: Dict[int, List[TimedPosition]] = {}
             for agent_idx, car_id in idx_to_car_id.items():
                 car_path: List[TimedPosition] = []
                 for t_rel, config in enumerate(result.solution):
                     if agent_idx < len(config):
-                        x, y = config[agent_idx]
+                        px, py = config[agent_idx]
+                        if ghost_exit_manager is not None:
+                            x, y = ghost_exit_manager.planner_to_world(px, py)
+                        else:
+                            x, y = px, py
                         car_path.append((x, y, current_time + t_rel))
                 paths[car_id] = car_path
 

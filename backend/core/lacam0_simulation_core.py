@@ -28,11 +28,15 @@ class LaCAM0SimulationCore:
         config.initial_cars
     """
 
-    def __init__(self, grid, parking_manager, config: SimulationConfig, batch_planner):
+    def __init__(self, grid, parking_manager, config: SimulationConfig, batch_planner,
+                 ghost_exit_manager=None):
         self.grid = grid
         self.parking_manager = parking_manager
         self.config = config
         self.batch_planner = batch_planner
+        self.ghost_exit_manager = ghost_exit_manager
+        # Keep a snapshot of original exit cells for in-transit exit detection
+        self.original_exit_cells: Set[Position] = set(parking_manager.exit_cells)
 
         self.time: int = 0
         self.active_cars: Dict[int, object] = {}
@@ -207,7 +211,10 @@ class LaCAM0SimulationCore:
 
         parked_cells = {car.current_position for car in self.parked_cars.values()}
 
-        paths = self.batch_planner.plan(plannable, self.grid, parked_cells, self.time)
+        paths = self.batch_planner.plan(
+            plannable, self.grid, parked_cells, self.time,
+            ghost_exit_manager=self.ghost_exit_manager,
+        )
 
         if paths is not None:
             for car_id, path in paths.items():
@@ -221,6 +228,19 @@ class LaCAM0SimulationCore:
             self.total_failed_plans += 1
             self.needs_replan = False
             self.last_replan_time = self.time
+
+    def _handle_car_exit(self, car_id: int, car) -> None:
+        """Remove an exiting car and release its ghost goal (if any)."""
+        self.total_exited += 1
+        self.total_exit_journeys += 1
+        self.sum_steps_to_exit += self.time - getattr(car, "exit_start_time", self.time)
+        self.exited_car_ids.add(car_id)
+        self.cars_pending_removal.add(car_id)
+        car.clear_path()
+        del self.active_cars[car_id]
+        if self.ghost_exit_manager is not None:
+            self.ghost_exit_manager.release_ghost_goal(car_id)
+        self.needs_replan = True
 
     def _execute_paths(self):
         """Advance every active car by one step along its LaCAM0 path."""
@@ -237,7 +257,14 @@ class LaCAM0SimulationCore:
             car.step(self.time)
             self.car_positions[car_id] = next_pos
 
-            # Check goal arrival.
+            # EXIT cars: remove as soon as they reach any original exit cell.
+            # (The LaCAM0 goal may be a ghost cell further out — we never let
+            # the car actually enter the ghost area.)
+            if car.intent == "EXIT" and next_pos in self.original_exit_cells:
+                self._handle_car_exit(car_id, car)
+                continue
+
+            # Check planner-goal arrival.
             if next_pos == car.goal:
                 if car.intent == "PARK":
                     self.total_parked += 1
@@ -250,16 +277,8 @@ class LaCAM0SimulationCore:
                     self.needs_replan = True
 
                 elif car.intent == "EXIT":
-                    self.total_exited += 1
-                    self.total_exit_journeys += 1
-                    self.sum_steps_to_exit += (
-                        self.time - getattr(car, "exit_start_time", self.time)
-                    )
-                    self.exited_car_ids.add(car_id)
-                    self.cars_pending_removal.add(car_id)
-                    car.clear_path()
-                    del self.active_cars[car_id]
-                    self.needs_replan = True
+                    # Safety net: ghost goal reached without passing exit cell.
+                    self._handle_car_exit(car_id, car)
 
     # ------------------------------------------------------------------
     # Public API
