@@ -1,0 +1,199 @@
+Block Entry-Cell Ghost Boundary — Implementation Plan
+=======================================================
+Generated for user review. No code has been changed yet.
+
+=======================================================================
+SECTION 1 — ROOT CAUSE
+=======================================================================
+
+The ghost box is attached to an entire EDGE, not just to exit cells.
+This means the ghost boundary row/column (the ghost cells directly
+adjacent to the original grid) is fully passable for every y / x
+position on that edge — including positions that sit behind ENTRY cells.
+
+Example (10×10 grid, left edge):
+  Exit  cell at (0, 5)  →  ghost boundary at (-1, 5) = '.'  ✓ intended
+  Entry cell at (0, 3)  →  ghost boundary at (-1, 3) = '.'  ✗ unintended
+
+LaCAM0 finds the shortest path to a ghost goal.  If the ghost goal is
+near y=3 and the entry cell (0,3) provides a straight corridor into the
+ghost box, it produces a path like:
+
+  car_pos → ... → (0,3) [entry] → (-1,3) → (-2,3) → ghost_goal
+
+Because (0,3) is NOT in `original_exit_cells`, the exit-detection check
+in `_execute_paths()` does not fire.  The car steps through the entry
+cell and into the ghost box, appearing to "exit through the entrance."
+
+=======================================================================
+SECTION 2 — FIX OVERVIEW
+=======================================================================
+
+Wall off every ghost boundary cell that is NOT directly behind an EXIT
+cell on that edge.  Only the one or two cells immediately behind EXIT
+cells remain '.'; everything else on the boundary row/column becomes '@'.
+
+The INTERIOR of the ghost box (cells ≥ 2 steps away from the original
+grid) stays fully open.  Once a car enters through a valid exit cell it
+can navigate anywhere in the interior to reach its ghost goal.
+
+Continuing the example:
+  (-1, 5) = '.'  (adjacent to exit  cell (0,5)) — passable ✓
+  (-1, 3) = '@'  (adjacent to entry cell (0,3)) — wall     ✓
+  (-2, y) = '.'  for all y  — interior, still reachable via (-1,5) ✓
+
+Effect: LaCAM0 can only enter the ghost box through EXIT cells.
+        It cannot use entry cells as a ghost-box gateway.
+
+=======================================================================
+SECTION 3 — BOUNDARY DEFINITION (per edge)
+=======================================================================
+
+"Boundary" = the ghost cells that are directly adjacent to the original
+grid along the ghost-box-facing side.
+
+  Left  edge  →  boundary cells: wx = -1,    wy ∈ [0, H-1]
+  Right edge  →  boundary cells: wx = W,     wy ∈ [0, H-1]
+  Top   edge  →  boundary cells: wy = -1,    wx ∈ [0, W-1]
+  Bottom edge →  boundary cells: wy = H,     wx ∈ [0, W-1]
+
+A boundary cell (bx, by) is BLOCKED (→ '@') unless the adjacent
+original-grid cell is an EXIT cell:
+
+  Left  edge:   (0,    by) must be an exit cell
+  Right edge:   (W-1,  by) must be an exit cell
+  Top   edge:   (bx,   0 ) must be an exit cell
+  Bottom edge:  (bx,  H-1) must be an exit cell
+
+Interior ghost cells (not on the boundary) are always '.'.
+
+=======================================================================
+SECTION 4 — GHOST GOAL POOL IMPACT
+=======================================================================
+
+Boundary cells that are walls cannot be standing positions in LaCAM0,
+so they must also be removed from the assignable ghost goal pool.
+
+For the example above, (-1,3) would be excluded from the left-edge pool.
+
+Pool size reduction:
+  Per edge, at most (ghost_boundary_length - num_exits_on_edge) cells
+  are blocked.  For a 10×10 grid with 1 exit on the left edge, 9 boundary
+  cells are blocked.  The remaining pool is:
+
+    1 boundary cell + W*(H-1) interior cells = 1 + 90 = 91 goals
+
+  This is still far more than any realistic number of simultaneous
+  exiting cars.
+
+=======================================================================
+SECTION 5 — CHANGED FILES (only 2)
+=======================================================================
+
+--- FILE 1 ---
+backend/planning/ghost_exit_manager.py
+  Changes:
+  a) Add private method _is_boundary_blocked_world(wx, wy) -> bool
+       Returns True if the ghost cell at world coords (wx, wy) is on
+       the ghost boundary AND the adjacent original-grid cell is NOT
+       an exit cell.
+       Logic (elif chain mirrors edge classification):
+         Left  edge: wx == -1   and (0,    wy) not in left  exits
+         Right edge: wx == W    and (W-1,  wy) not in right exits
+         Top   edge: wy == -1   and (wx,   0 ) not in top   exits
+         Bottom edge:wy == H    and (wx,  H-1) not in bottom exits
+         Otherwise: False (interior cell, never blocked by this rule)
+
+  b) Add public method ghost_cell_passable(planner_x, planner_y) -> bool
+       Converts to world coords then:
+         if _is_boundary_blocked_world(wx, wy): return False
+         return True
+       Used by lacam0_map_generator when emitting ghost cells.
+
+  c) Modify _build_pools()
+       After sorting, filter each edge's ghost cell list:
+         ghosts_filtered = [
+             cell for cell in ghosts_sorted
+             if not self._is_boundary_blocked_world(*cell)
+         ]
+         self._pools[edge] = deque(ghosts_filtered)
+       This ensures no blocked boundary cell is ever assigned as a goal.
+
+--- FILE 2 ---
+backend/planning/lacam0_map_generator.py
+  Change:
+  In the expanded-map branch, replace:
+
+    elif ghost_exit_manager.is_ghost_area(px, py):
+        row += "."   # ← was always '.'
+
+  with:
+
+    elif ghost_exit_manager.is_ghost_area(px, py):
+        row += "." if ghost_exit_manager.ghost_cell_passable(px, py) else "@"
+
+  One line change.
+
+=======================================================================
+SECTION 6 — WHAT IS NOT CHANGED
+=======================================================================
+
+- lacam0_simulation_core.py — exit detection is unchanged.
+  Cars are still removed upon reaching any original EXIT cell.
+  With boundary cells blocked, LaCAM0 won't produce paths through
+  entry cells into the ghost box in the first place.
+
+- lacam0_batch_planner.py — no change.
+  Pre-validation already marks boundary-blocked ghost goals as '.' →
+  after this fix they correctly become '@', so a goal at a blocked
+  boundary cell would be flagged as BLOCKED and excluded.
+  (In practice this never occurs because the pool no longer contains
+  blocked boundary cells.)
+
+- lacam0_parking_manager.py, lacam0_scen_generator.py — no change.
+
+- Frontend — no change.
+
+=======================================================================
+SECTION 7 — CONCRETE WALKTHROUGH (left edge, 10×10)
+=======================================================================
+
+Before fix:
+  Map left boundary (planner col 9, world col -1): all '.'
+  LaCAM0 path: (3,3) → (2,3) → (1,3) → (0,3)[entry] → (-1,3) → (-2,3)[goal]
+  Car exits through entry cell ✗
+
+After fix:
+  (-1, y) for y ≠ 5 = '@'   (-1, 5) = '.'
+  Pool excludes (-1,0)..(-1,4), (-1,6)..(-1,9)
+  Ghost goal assigned: (-2, 7) for example (first interior cell from pool)
+  LaCAM0 must now route through (0,5)[exit cell]:
+    (3,3) → ... → (0,5)[exit] → (-1,5) → (-2,5) → (-2,6) → (-2,7)[goal]
+  Car is removed at (0,5) ✓
+  Entry cell (0,3) is never on an exit path ✓
+
+=======================================================================
+SECTION 8 — EDGE CASES
+=======================================================================
+
+- Exit cell IS adjacent to entry cell (e.g. exit (0,4), entry (0,3)):
+  (-1,4) = '.' (exit-adjacent), (-1,3) = '@' (entry-adjacent).
+  No issue — exit has its own open boundary cell. ✓
+
+- Multiple exits on same edge (e.g. (0,2) and (0,7)):
+  (-1,2) = '.', (-1,7) = '.', all other (-1,y) = '@'.
+  Cars can enter ghost box through either exit. ✓
+
+- Entry cell on a different edge from any exit:
+  No ghost box is created for that edge (entry-only edges are not
+  active in GhostExitManager). No change needed. ✓
+
+- No entry cells at all:
+  _is_boundary_blocked_world checks against exit cell lists.
+  Non-exit positions are still blocked. ✓
+  (This is fine: all non-exit boundary cells become '@', which just
+  concentrates ghost-box entry to exit positions as intended.)
+
+=======================================================================
+END OF PLAN
+=======================================================================

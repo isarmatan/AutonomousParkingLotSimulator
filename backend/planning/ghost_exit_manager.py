@@ -106,7 +106,47 @@ class GhostExitManager:
                 return min(abs(gx - ex) + abs(gy - ey) for (ex, ey) in exits)
 
             ghosts_sorted = sorted(edge_ghost_cells[edge], key=_min_dist)
-            self._pools[edge] = deque(ghosts_sorted)
+            # Exclude boundary cells that are not adjacent to an exit cell —
+            # those will be walls in the map and cannot be stood on.
+            ghosts_filtered = [
+                cell for cell in ghosts_sorted
+                if not self._is_boundary_blocked_world(*cell)
+            ]
+            self._pools[edge] = deque(ghosts_filtered)
+
+    # ------------------------------------------------------------------
+    # Boundary-block helpers
+    # ------------------------------------------------------------------
+
+    def _is_boundary_blocked_world(self, wx: int, wy: int) -> bool:
+        """
+        Return True if ghost cell (wx, wy) in world coords sits on the
+        ghost-box boundary (directly adjacent to the original grid) AND
+        the neighbouring original-grid cell is NOT an exit cell.
+
+        Such cells are emitted as '@' in the expanded map so that LaCAM0
+        cannot route exiting cars through entry (or road) cells into the
+        ghost box.
+        """
+        exit_set_left   = set(self._edge_exit_cells.get("left",   []))
+        exit_set_right  = set(self._edge_exit_cells.get("right",  []))
+        exit_set_top    = set(self._edge_exit_cells.get("top",    []))
+        exit_set_bottom = set(self._edge_exit_cells.get("bottom", []))
+
+        if "left" in self._active_edges and wx == -1 and 0 <= wy < self.H:
+            return (0, wy) not in exit_set_left
+        if "right" in self._active_edges and wx == self.W and 0 <= wy < self.H:
+            return (self.W - 1, wy) not in exit_set_right
+        if "top" in self._active_edges and wy == -1 and 0 <= wx < self.W:
+            return (wx, 0) not in exit_set_top
+        if "bottom" in self._active_edges and wy == self.H and 0 <= wx < self.W:
+            return (wx, self.H - 1) not in exit_set_bottom
+        return False
+
+    def ghost_cell_passable(self, planner_x: int, planner_y: int) -> bool:
+        """Return True if a ghost cell (planner coords) should be '.' in the map."""
+        wx, wy = self.planner_to_world(planner_x, planner_y)
+        return not self._is_boundary_blocked_world(wx, wy)
 
     # ------------------------------------------------------------------
     # Coordinate translation

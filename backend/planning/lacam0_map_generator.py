@@ -68,8 +68,9 @@ def generate_map(grid, parked_cells: set, ghost_exit_manager=None) -> str:
                 else:
                     row += "."
             elif ghost_exit_manager.is_ghost_area(px, py):
-                # Inside an active ghost box — always passable
-                row += "."
+                # Inside an active ghost box — passable only if not a
+                # boundary cell blocked against a non-exit original cell.
+                row += "." if ghost_exit_manager.ghost_cell_passable(px, py) else "@"
             else:
                 # Corner padding between ghost boxes — unreachable wall
                 row += "@"
