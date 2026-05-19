@@ -102,13 +102,17 @@ export default function Simulation() {
   const liveCarsRef = useRef<Record<string, [number, number, number]>>({});
   const prevCarsRef = useRef<Record<string, [number, number, number]>>({});
   const canvasRef   = useRef<HTMLCanvasElement>(null);
-  const sim2DRef    = useRef<HTMLDivElement>(null);
 
-  // 2D view scaling
-  const [gridScale, setGridScale] = useState(1);
-  const CELL_PX   = 32;
-  const GAP_PX    = 1;
+  // 2D view constants
+  const CELL_PX    = 32;
+  const GAP_PX     = 1;
   const PADDING_PX = 1;
+
+  // 2D zoom
+  const ZOOM_STEPS   = [0.5, 0.75, 1.0, 1.5, 2.0, 3.0];
+  const ZOOM_DEFAULT = 2; // index of 1.0×
+  const [zoomLevel, setZoomLevel] = useState(ZOOM_DEFAULT);
+  const [windowSize, setWindowSize] = useState({ w: window.innerWidth, h: window.innerHeight });
 
   // ---- WebSocket + /start ----
   useEffect(() => {
@@ -249,23 +253,29 @@ export default function Simulation() {
     };
   }, [gridData]);
 
-  // ---- 2D scale ----
+  // ---- Track window size for auto-fit recalculation ----
   useEffect(() => {
-    if (!gridData || viewMode !== "2D") return;
-    const el = sim2DRef.current;
-    if (!el) return;
-    const compute = () => {
-      const rect = el.getBoundingClientRect();
-      const sx = (rect.width  - 40) / canvasSize.width;
-      const sy = (rect.height - 40) / canvasSize.height;
-      setGridScale(Math.max(0.1, Math.min(1, sx, sy)));
-    };
-    compute();
-    const ro = new ResizeObserver(compute);
-    ro.observe(el);
-    window.addEventListener("resize", compute);
-    return () => { window.removeEventListener("resize", compute); ro.disconnect(); };
-  }, [gridData, viewMode, canvasSize]);
+    const onResize = () => setWindowSize({ w: window.innerWidth, h: window.innerHeight });
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+
+  // ---- Reset zoom when a new layout loads ----
+  useEffect(() => { setZoomLevel(ZOOM_DEFAULT); }, [gridData]);
+
+  // ---- Auto-fit base scale (computed synchronously — no race condition) ----
+  // Vertical chrome: AppLayout header 98 + simHeader 72 + simPage padding 2×16 + gap 16 = 218 px
+  // Horizontal chrome: simPage left+right padding = 32 px
+  const gridScale = useMemo(() => {
+    if (!gridData) return 1;
+    const availW = windowSize.w - 32;
+    const availH = windowSize.h - 218;
+    const sx = (availW - 40) / canvasSize.width;
+    const sy = (availH - 40) / canvasSize.height;
+    return Math.max(0.25, Math.min(1, sx, sy));
+  }, [gridData, canvasSize, windowSize]);
+
+  const effectiveScale = gridScale * ZOOM_STEPS[zoomLevel];
 
   // ---- 2D canvas draw ----
   useEffect(() => {
@@ -369,6 +379,34 @@ export default function Simulation() {
                 <span style={{ fontSize: "0.8rem", fontWeight: 600 }}>3D</span>
               </button>
             </div>
+
+            {viewMode === "2D" && (
+              <div style={{ display: "flex", alignItems: "center", gap: "0.25rem", borderRight: "1px solid #333", paddingRight: 16, marginRight: -8 }}>
+                <button
+                  className="iconBtn"
+                  onClick={() => setZoomLevel(z => Math.max(0, z - 1))}
+                  disabled={zoomLevel === 0}
+                  title="Zoom out"
+                  style={{ width: "auto", padding: "0 8px", fontSize: "1.1rem", fontWeight: 700 }}
+                >−</button>
+                <span style={{ fontSize: "0.75rem", color: "#94a3b8", fontVariantNumeric: "tabular-nums", minWidth: "2.5rem", textAlign: "center" }}>
+                  {zoomLevel === ZOOM_DEFAULT ? "fit" : `×${ZOOM_STEPS[zoomLevel]}`}
+                </span>
+                <button
+                  className="iconBtn"
+                  onClick={() => setZoomLevel(z => Math.min(ZOOM_STEPS.length - 1, z + 1))}
+                  disabled={zoomLevel === ZOOM_STEPS.length - 1}
+                  title="Zoom in"
+                  style={{ width: "auto", padding: "0 8px", fontSize: "1.1rem", fontWeight: 700 }}
+                >+</button>
+                <button
+                  className="iconBtn"
+                  onClick={() => setZoomLevel(ZOOM_DEFAULT)}
+                  title="Reset zoom to auto-fit"
+                  style={{ width: "auto", padding: "0 8px", fontSize: "0.7rem", fontWeight: 700, letterSpacing: "0.05em" }}
+                >FIT</button>
+              </div>
+            )}
 
             {!loading && !error && (
               <>
@@ -491,9 +529,15 @@ export default function Simulation() {
                   />
                 </div>
               ) : (
-                <div className="simCanvasScroll" ref={sim2DRef}>
+                <div className="simCanvasScroll">
                   {gridRows && (
-                    <div className="simGridWrap" style={{ transform: `scale(${gridScale})` }}>
+                    <div style={{
+                      width:  canvasSize.width  * effectiveScale,
+                      height: canvasSize.height * effectiveScale,
+                      position: "relative",
+                      flexShrink: 0,
+                    }}>
+                    <div className="simGridWrap" style={{ transform: `scale(${effectiveScale})` }}>
                       <div style={{ position: "relative" }}>
                         <div
                           className="simGrid"
@@ -526,6 +570,7 @@ export default function Simulation() {
                           className="simCanvas"
                         />
                       </div>
+                    </div>
                     </div>
                   )}
                 </div>

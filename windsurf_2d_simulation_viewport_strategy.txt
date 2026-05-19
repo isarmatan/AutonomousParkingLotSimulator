@@ -1,0 +1,144 @@
+Context
+=======
+We have an Autonomous Parking Lot Simulator with both 3D and 2D simulation views.
+
+Important note:
+The 3D simulation is working fine and should NOT be changed.
+The focus of this task is ONLY the 2D simulation view.
+
+Current Problem
+===============
+The 2D simulation does not handle large parking lot dimensions well.
+
+When the parking lot width and/or height is too large:
+- The parking lot does not fit properly inside the visible screen.
+- The layout appears positioned incorrectly or awkwardly.
+- If the parking lot height is too large, the bottom part of the parking lot becomes invisible.
+- The page/simulation area appears fixed, so the user cannot scroll down to see the hidden parts.
+- This makes large parking lots difficult or impossible to view/use in the 2D simulation.
+
+Goal
+====
+Create a strategy for fixing the 2D simulation viewport/layout behavior for large parking lots.
+
+Do NOT implement anything yet.
+First, analyze the current code and create a proposed solution/strategy txt.
+Implementation should only begin after I review and approve the strategy.
+
+What I Need You To Investigate
+==============================
+Please scan the relevant frontend code thoroughly, especially the 2D simulation rendering/layout components.
+
+Understand:
+- How the 2D parking lot grid is currently rendered.
+- How width/height/cell-size are calculated.
+- Whether the simulation container has fixed dimensions.
+- Whether overflow is currently disabled or hidden.
+- How the layout behaves across different screen sizes.
+- Whether the 2D view uses canvas, div grid, SVG, or another rendering method.
+- Whether changing the layout could affect simulation logic, vehicle movement, path rendering, or performance.
+
+Main Requirement
+================
+Propose the simplest safe solution that fixes large parking lots without damaging existing simulation logic or significantly hurting performance.
+
+Possible Directions To Consider
+===============================
+Please compare the following options and recommend the best one:
+
+1. Scrollable 2D viewport
+-------------------------
+Make the 2D simulation area scrollable when the parking lot is larger than the available screen.
+
+Possible benefits:
+- Simple and low risk.
+- Does not require changing path logic or coordinate calculations.
+- Preserves the current rendering scale.
+
+Possible concerns:
+- User may need to scroll a lot for very large maps.
+- Need to make sure controls/buttons remain accessible.
+
+2. Zoom in / zoom out controls
+------------------------------
+Allow the user to zoom the 2D parking lot view in and out.
+
+Possible benefits:
+- Useful for large maps.
+- Lets the user choose between overview and detail.
+
+Possible concerns:
+- May require careful handling of cell sizes, labels, vehicles, paths, click events, etc.
+- Could introduce more bugs if the current rendering assumes fixed cell sizes.
+
+3. Auto-fit to screen
+---------------------
+Automatically scale the 2D parking lot to fit inside the available viewport.
+
+Possible benefits:
+- The entire parking lot is visible immediately.
+
+Possible concerns:
+- For very large lots, cells may become too small to understand.
+- Could make cars, paths, labels, or interactions unreadable.
+- May require more layout calculations.
+
+4. Hybrid approach
+------------------
+Use a combination, for example:
+- Default to auto-fit or reasonable initial scale.
+- Add zoom controls.
+- Allow scrolling/panning when zoomed in.
+
+Possible benefits:
+- Best user experience.
+
+Possible concerns:
+- More implementation complexity.
+- Higher risk of introducing bugs compared to a simple scrollable container.
+
+Preferred Direction
+===================
+My preference is to choose the simplest robust fix first.
+
+Most likely, the safest solution is:
+- Wrap the 2D simulation/grid in a responsive scrollable container.
+- Make sure overflow-x and overflow-y are enabled when needed.
+- Keep the actual simulation grid/cell coordinates unchanged.
+- Avoid changing simulation logic.
+- Optionally add basic zoom controls only if it can be done safely and cleanly.
+
+However, please do not assume this blindly.
+Please inspect the current code first and recommend the best approach based on the actual implementation.
+
+Strategy Document Required
+==========================
+Before implementing, please create a short strategy document explaining:
+
+1. Which files/components are involved.
+2. What currently causes the 2D simulation to overflow or be clipped.
+3. Which solution you recommend.
+4. Why this solution is safer than the alternatives.
+5. Whether the fix requires only CSS/layout changes or also React logic changes.
+6. Whether zoom should be included now or left for a later improvement.
+7. Potential risks.
+8. A step-by-step implementation plan.
+9. How to test the fix with small, medium, and very large parking lots.
+
+Important Constraints
+=====================
+- Do NOT modify the 3D simulation.
+- Do NOT change backend logic.
+- Do NOT change MAPF/pathfinding logic.
+- Do NOT change vehicle movement logic unless absolutely necessary.
+- Do NOT implement before I approve the strategy.
+- Prefer a low-risk solution that is easy to review and unlikely to break existing behavior.
+- Avoid expensive rendering changes that could hurt performance.
+- Preserve the current 2D simulation behavior for normal/small parking lots.
+
+Expected Output For Now
+=======================
+Only produce a strategy/proposal.
+Do not write code yet.
+Do not apply changes yet.
+Wait for my approval before implementation.

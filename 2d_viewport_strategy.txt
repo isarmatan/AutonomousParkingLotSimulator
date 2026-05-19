@@ -1,0 +1,240 @@
+2D Simulation Viewport — Strategy Document
+==========================================
+For review before implementation. No code changes made yet.
+
+=======================================================================
+1. FILES / COMPONENTS INVOLVED
+=======================================================================
+
+Only two files need to change:
+
+  frontend/src/pages/Simulation.tsx   — React logic, scale state, zoom buttons
+  frontend/src/pages/Simulation.css   — container layout and overflow rules
+
+The 3D path (Simulation3D.tsx, Scene3D.tsx) is NOT touched.
+Backend is NOT touched. MAPF/car logic is NOT touched.
+
+=======================================================================
+2. WHAT CURRENTLY CAUSES THE 2D VIEW TO OVERFLOW / BE CLIPPED
+=======================================================================
+
+A. overflow: hidden on every container layer
+---------------------------------------------
+The chain is:
+  .simPage          → overflow: hidden
+  .simContent       → overflow: hidden
+  .canvasContainer  → overflow: hidden
+  .simCanvasScroll  → overflow: hidden
+
+There is literally no path for a scrollbar to appear anywhere.
+If the grid does not fit, it is silently clipped.
+
+B. CSS transform + place-items: center bottom-clipping
+------------------------------------------------------
+.simCanvasScroll uses:
+  display: grid;
+  place-items: center;
+  position: absolute; inset: 0;
+
+The grid cell (simGridWrap) is placed centred in the container.
+When the item is LARGER than the container, the browser treats
+the centre alignment as "safe" in some scenarios — clamping the
+item's top edge at 0 instead of going negative. This means the
+item starts at y=0 and its bottom half is clipped by overflow:hidden.
+Result: the top of the parking lot is visible, the bottom is cut off.
+
+C. gridScale race condition
+---------------------------
+gridScale defaults to 1. The ResizeObserver useEffect runs AFTER
+the first paint. On that first paint the full-size grid renders,
+overflow clips it, and the user briefly (or permanently if there is
+any timing problem) sees the clipped version.
+
+D. No fallback at all
+---------------------
+If the scale computation produces a value slightly too large (floating
+point, padding miscalculation, resize event not yet fired), there is no
+scroll escape hatch — the content is permanently invisible.
+
+=======================================================================
+3. RECOMMENDED SOLUTION
+=======================================================================
+
+Hybrid approach (scroll-first + improved auto-fit + zoom buttons):
+
+Step 1 — Make the viewport scrollable (primary fix, CSS-only)
+  Remove position:absolute/inset:0 from .simCanvasScroll.
+  Give it flex:1, min-height:0, overflow:auto.
+  Change transform-origin on .simGridWrap to top left (so scale
+  shrinks toward the top-left corner, matching scroll origin).
+
+Step 2 — Fix the auto-fit scale (eliminate race condition, TSX change)
+  Replace the ResizeObserver + useState approach with a useMemo that
+  computes the initial scale synchronously from window.innerHeight and
+  the known fixed layout offsets (AppLayout header = 98px, simHeader
+  = 72px, padding/gap = 64px → total vertical chrome = 234px).
+  This gives the correct scale on the very first render — no flash,
+  no clipping. Also add a ResizeObserver for window resize support.
+
+Step 3 — Add zoom buttons (small UX improvement, TSX + CSS change)
+  Add three buttons to the header bar: zoom out (−), reset, zoom in (+).
+  Zoom levels: [0.25, 0.33, 0.5, 0.67, 0.75, 1.0].
+  Zoom multiplies the auto-fit scale (so "reset" restores the auto-fit
+  scale, not a hard-coded 1.0).
+  This is purely additive — no existing logic changes.
+
+=======================================================================
+4. WHY THIS IS SAFER THAN THE ALTERNATIVES
+=======================================================================
+
+Option 1 — Scrollable only (no scale)
+  Pros: absolute minimum changes, zero risk.
+  Cons: a 40×40 grid fills ~1300px; users must scroll a lot.
+  Verdict: viable but poor UX for anything above ~25×25.
+
+Option 2 — Auto-fit only (fix race condition, no scroll)
+  Pros: whole grid always visible.
+  Cons: for huge grids (50×50) each cell is 800/1650 ≈ 0.48 × 32 ≈
+        15px — readable but tight. Zoom and scroll are both missing.
+  Verdict: better than current but still limited.
+
+Option 3 — Hybrid scroll + auto-fit + zoom (RECOMMENDED)
+  - Scroll is always the safety net: even if scale calculation goes
+    wrong, users can scroll to see content.
+  - Auto-fit removes the need to scroll for typical grids.
+  - Zoom lets users choose between overview and detail.
+  - All three are independent; each adds value alone.
+  - Risk: LOW — only CSS layout and a simple numeric state.
+
+Option 4 — Canvas rewrite (performance-first)
+  Pros: could handle any size, smooth pan/zoom.
+  Cons: requires rewriting the grid rendering AND car overlay; high
+        risk of regressions in car coordinate drawing.
+  Verdict: NOT recommended now.
+
+=======================================================================
+5. CSS-ONLY vs REACT LOGIC CHANGES
+=======================================================================
+
+Step 1 (scroll):  CSS-only — zero React logic changes.
+Step 2 (scale):   Minor React change — remove useEffect/ResizeObserver
+                  for scale, add useMemo. The "gridScale" state becomes
+                  a computed value. Canvas size calculation is unchanged.
+Step 3 (zoom):    Small additive React change — one new state variable
+                  (zoom level), two buttons, one multiplier applied to
+                  the existing gridScale. No logic in car drawing or
+                  coordinate system changes.
+
+=======================================================================
+6. SHOULD ZOOM BE INCLUDED NOW?
+=======================================================================
+
+Yes — it is cheap to add alongside the scroll fix (5–10 lines of TSX
++ 10 lines of CSS), provides immediate UX value, and is purely additive.
+All it does is multiply the CSS transform on simGridWrap. No risk of
+breaking existing logic.
+
+=======================================================================
+7. POTENTIAL RISKS
+=======================================================================
+
+- simCanvas (the car overlay) uses explicit width/height attributes set
+  to canvasSize.width/height.  CSS says width:100%;height:100% on that
+  canvas so it stretches over the simGrid.  This is unaffected by the
+  scroll or zoom changes since the canvas pixels track the grid pixels.
+
+- The stats panel (.simStats) is position:absolute at left:16px,
+  top:50%.  After removing position:absolute from simCanvasScroll, the
+  stats panel's containing block remains .canvasContainer (which keeps
+  position:relative).  No change needed.
+
+- The 3D wrapper (.canvasWrapper3D) branch is entirely separate from the
+  2D branch in JSX.  It is not affected.
+
+- Scrollbars appear inside .simCanvasScroll and will overlay a few pixels
+  of the grid edge.  This is acceptable and expected behavior for overflow:auto.
+
+=======================================================================
+8. STEP-BY-STEP IMPLEMENTATION PLAN
+=======================================================================
+
+Step A — CSS changes in Simulation.css
+  A1. .simCanvasScroll:
+      - Remove: position: absolute; inset: 0;
+      - Change:  overflow: hidden  →  overflow: auto
+      - Add:     flex: 1; min-height: 0;
+      - Remove:  display: grid; place-items: center;  (no longer needed)
+      - Keep:    width: 100%;
+
+  A2. .simGridWrap:
+      - Change transform-origin from (implicit) center  →  top left
+        (so zooming/scaling anchors at the top-left, matching scroll origin)
+
+  A3. Add new CSS class .simZoomControls for the zoom button group.
+
+Step B — TSX changes in Simulation.tsx
+  B1. Remove: const [gridScale, setGridScale] = useState(1);
+      Replace with: const gridScale = useMemo(() => { ... }, [gridData, canvasSize]);
+      Logic: estimate available height as window.innerHeight - 234 (fixed chrome).
+             estimate available width as  window.innerWidth  -  32 (simPage padding).
+             sx = (availW - 40) / canvasSize.width
+             sy = (availH - 40) / canvasSize.height
+             return clamp(min(sx, sy), 0.25, 1)
+      Keep a ResizeObserver re-trigger via a windowSize state so useMemo
+      recomputes on resize (one small state: [winW, winH]).
+
+  B2. Remove: the useEffect that computes gridScale via ResizeObserver.
+      (Replaced by the useMemo above.)
+      Keep or remove: sim2DRef — still used for scroll container reference if needed,
+      otherwise can be removed.
+
+  B3. Add zoom state:
+      const [zoomLevel, setZoomLevel] = useState(3);  // index into zoom steps
+      const ZOOM_STEPS = [0.25, 0.33, 0.5, 0.67, 0.75, 1.0];
+      const effectiveScale = gridScale * ZOOM_STEPS[zoomLevel];
+      Replace transform: `scale(${gridScale})` with transform: `scale(${effectiveScale})`
+
+  B4. Add zoom buttons in the header bar (next to view toggle):
+      − button:  setZoomLevel(z => Math.max(0, z - 1))
+      Reset:     setZoomLevel(3)   // back to 1.0× zoom level
+      + button:  setZoomLevel(z => Math.min(ZOOM_STEPS.length-1, z + 1))
+      Disable − when at min, disable + when at max.
+
+  B5. Reset zoomLevel to 3 when gridData changes (new layout loaded).
+
+=======================================================================
+9. TESTING PLAN
+=======================================================================
+
+Small grid (≤ 10×10):
+  - Grid should appear centred and large, with no scrollbars.
+  - Zoom in: cells get bigger, scrollbars appear.
+  - Zoom out: grid shrinks, stays at top-left origin.
+
+Medium grid (15×20):
+  - Grid auto-fits on most screens without scrollbars.
+  - Zoom in/out works correctly.
+  - Cars render correctly over the grid at all zoom levels.
+
+Large grid (30×30):
+  - Grid auto-fits to ~0.5–0.7× scale depending on monitor.
+  - Entire grid visible without scrolling.
+  - Zooming in to 1.0× creates scrollbars; user can pan with scroll.
+  - Bottom rows are always visible (no clipping).
+
+Very large grid (50×50 or bigger):
+  - Auto-fit gives tiny scale (~0.3–0.4×), entire grid still visible.
+  - Zoom in to 0.5× or 0.67× for better readability, scroll to navigate.
+  - No content is ever invisible or unscrollable.
+
+Resize window while simulation is running:
+  - Grid rescales immediately (useMemo re-evaluates on winSize change).
+  - No layout break or flash.
+
+Switch 2D ↔ 3D:
+  - 3D view completely unchanged.
+  - Switching back to 2D re-applies correct scale.
+
+=======================================================================
+END OF STRATEGY
+=======================================================================
