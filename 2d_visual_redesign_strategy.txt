@@ -1,0 +1,213 @@
+2D Visual Redesign Strategy
+=============================
+Analysis + proposal only. No code changed.
+Files in scope: Simulation.css (CSS cells), Simulation.tsx (canvas car drawing).
+Untouched: simulation logic, coordinates, WebSocket, 3D path, parking/entry/exit styles.
+
+=======================================================================
+1. CURRENT RENDERING — WHAT EXISTS NOW
+=======================================================================
+
+WALLS (.cell-WALL)
+  Background: dark gradient (#1a2029 → #0c1016)
+  Border: inset glow 1.5px rgba(220,225,235,0.45) — looks like a lit edge
+  ::after: the character "×" centred, white glow text
+  Problem: the "×" reads as "error / rejected" not as "obstacle".
+           The bright outer glow (0 0 14px rgba(220,225,235,0.25)) makes walls
+           look luminous — they compete with entry/exit cells for attention.
+           At small zoom levels the "×" becomes illegible noise.
+
+ROADS (.cell-ROAD)
+  Background: dark gradient (#2a2f38 → #12151c)
+  ::after: a horizontal dashed stripe across the cell centre
+  Problem: the dashed stripe is always horizontal. In a parking lot roads
+           go in all directions; the stripe looks like a mis-drawn lane marker.
+           It adds visual noise without conveying useful information.
+           The overall road colour is almost indistinguishable from walls at
+           a glance, making the layout hard to parse quickly.
+
+CARS (canvas, ctx drawing)
+  Shape: rounded rect, CELL_PX×0.75 wide × CELL_PX×0.45 tall (24×14.4px)
+  Details: two black wheel-mark rects (3px wide) + two 1.5px headlight dots
+  Label: "bold 9px sans-serif" ID text drawn directly on top
+  Colors: CAR_INITIAL (purple/magenta) and CAR_ARRIVING (cyan/teal) — from
+          COLORS constants (need to verify exact values).
+  Problems:
+    - The wheel marks are 3px at 32px cells → invisible at auto-fit zoom.
+    - The headlight dots (1.5px radius) are invisible at any scale below 1.
+    - The car shape has no visual weight — it blends into the dark road.
+    - The ID label is drawn in a dark colour on a dark car → illegible.
+    - No shadow or glow → cars have no visual depth/pop.
+    - No directional indicator → hard to tell which way a car is heading.
+
+=======================================================================
+2. DESIGN GOALS
+=======================================================================
+
+  G1. Cars must pop off the grid — immediately visible at any zoom level.
+  G2. Walls must read as solid/heavy obstacle, not a glowing icon.
+  G3. Roads must be clearly distinct from walls at a glance.
+  G4. Remove visual noise (dashes, "×", tiny dots) that disappears at scale.
+  G5. Keep the dark cyberpunk palette that entry/exit/parking already use.
+  G6. Zero changes to: parking, entry, exit, simulation logic, coordinates.
+
+=======================================================================
+3. PROPOSED DIRECTION: CLEAN DARK FLAT + SOFT GLOW ON CARS
+=======================================================================
+
+Walls → solid concrete block (no symbol, strong border, subtle texture)
+Roads → flat asphalt (neutral dark, NO stripe, slight brightness over wall)
+Cars  → glowing pill shape with halo, clean white ID label
+
+This is the minimal-change path: walls and roads change only in CSS
+(no new DOM elements, no JS changes). Cars change only in the canvas
+draw function (no DOM changes).
+
+=======================================================================
+4. WALLS — PROPOSED CHANGES
+=======================================================================
+
+Remove:
+  - ::after "×" symbol entirely
+  - outer glow box-shadow (0 0 14px ...)
+  - bright inset border glow
+
+Replace with:
+  - Darker, denser gradient: #0d1117 → #060a0f  (near-black concrete)
+  - Thin 1px inset border: rgba(255,255,255,0.08) — barely visible seam
+  - Very subtle diagonal hatch via CSS background-image (repeating-linear-gradient)
+    to give a "textured concrete" feel without introducing a symbol:
+    background-image: repeating-linear-gradient(
+      45deg,
+      rgba(255,255,255,0.025) 0px,
+      rgba(255,255,255,0.025) 1px,
+      transparent 1px,
+      transparent 6px
+    );
+  - A slightly heavier drop shadow (0 2px 6px rgba(0,0,0,0.7)) for depth
+
+Visual result: walls appear as a dense, heavy, slightly textured dark block.
+They recede into the background — roads and cars are the focus.
+No symbols = no visual noise at small zoom.
+
+=======================================================================
+5. ROADS — PROPOSED CHANGES
+=======================================================================
+
+Remove:
+  - ::after dashed stripe entirely
+  - the complex dual radial-gradient (reduces visual noise)
+
+Replace with:
+  - Slightly lighter flat colour: #1e2330 (clearly brighter than wall #0d1117)
+  - Single subtle radial vignette (center highlight):
+    background: radial-gradient(ellipse at 50% 40%,
+      rgba(255,255,255,0.04) 0%, transparent 70%),
+      #1e2330;
+  - Inset border: 1px solid rgba(255,255,255,0.04) — very faint cell edge
+  - No ::after content
+
+Visual result: roads are visibly lighter than walls (easier layout reading),
+completely clean (no stripe noise), subtle enough to not distract from cars.
+The colour difference wall (#0d1117) vs road (#1e2330) is about 20% brightness
+— perceptible at all zoom levels.
+
+=======================================================================
+6. CARS — PROPOSED CHANGES (canvas draw)
+=======================================================================
+
+Shape:
+  Keep: rounded rectangle, same proportions (0.75 × 0.45 CELL_PX)
+  Add:  a glow halo drawn BEFORE the car body (ctx.shadowBlur/shadowColor)
+        This is zero-DOM, purely ctx state, no coordinate changes.
+
+Body colours:
+  Initial cars (already parked):
+    Old: opaque CAR_INITIAL colour
+    New: richer solid fill + shadow glow
+    Suggested fill: #7c3aed  (vivid violet)
+    Suggested glow: shadowColor = rgba(139,92,246,0.8), shadowBlur = 8
+
+  Arriving/active cars:
+    Old: opaque CAR_ARRIVING colour
+    New: richer solid fill + shadow glow
+    Suggested fill: #0ea5e9  (vivid sky blue)
+    Suggested glow: shadowColor = rgba(56,189,248,0.8), shadowBlur = 8
+
+Stroke: replace the black stroke with a thin white stroke (rgba(255,255,255,0.3))
+  for a "lit edge" look that works on any background.
+
+Remove wheel-mark rects (3px) and headlight dots (1.5px):
+  These are not visible at typical zoom and add code complexity.
+  The glow halo provides sufficient visual distinctiveness.
+
+ID label:
+  Old: fillStyle = COLORS.CAR_TEXT, "bold 9px sans-serif"
+  New: white fill with ctx.shadowColor = rgba(0,0,0,0.8) / shadowBlur = 3
+       This gives a legible white-on-dark label at all zoom levels.
+       Keep font: "bold 9px sans-serif" — no size change (stays within cell).
+
+Direction indicator (optional — see section 7):
+  A small triangle at the car's "front" end (right side of the rectangle)
+  drawn using ctx.beginPath + ctx.moveTo/lineTo in the same fill colour.
+  This communicates heading without adding complexity.
+
+=======================================================================
+7. OPTIONAL ENHANCEMENTS (not required, can be Phase 2)
+=======================================================================
+
+A. Car direction arrow:
+   A small filled triangle (height: CELL_PX*0.18, base: CELL_PX*0.15)
+   drawn at the right edge of the car body pointing right.
+   This requires no coordinate-system changes.
+   Implement only if cars consistently move right-to-left on the road;
+   otherwise it is misleading without rotation.
+   Skip for now unless car heading data is available from the WebSocket.
+
+B. Car status colours (3-state):
+   parked → grey (rgba(100,116,139,0.9))
+   in-transit → sky blue (as proposed above)
+   reached goal → green flash briefly
+   This requires a small state flag per car — backend would need to send
+   status alongside position. Low priority.
+
+C. Road subtle dot grid:
+   Instead of no marking at all, add a 1px dot every 16px using
+   background-image: radial-gradient(rgba(255,255,255,0.07) 1px, transparent 1px)
+   background-size: 16px 16px
+   This gives asphalt a subtle texture without directional confusion.
+
+=======================================================================
+8. SUMMARY TABLE
+=======================================================================
+
+Object   | Change Type | Risk  | Lines affected
+---------|-------------|-------|---------------------------------------------
+Walls    | CSS only    | Low   | .cell-WALL + .cell-WALL::after (remove)
+Roads    | CSS only    | Low   | .cell-ROAD + .cell-ROAD::after (remove)
+Cars     | Canvas JS   | Low   | ~20 lines in the canvas draw useEffect
+
+DO NOT TOUCH:
+  .cell-PARKING, .cell-ENTRY, .cell-EXIT (satisfied with current look)
+  All simulation logic, coordinates, WebSocket, 3D rendering
+
+=======================================================================
+9. WHICH OPTION DO YOU PREFER?
+=======================================================================
+
+Option 1 — All three (walls + roads + cars) as described above
+  Full redesign of the 2D visual, cleanest result.
+
+Option 2 — Roads + cars only (keep wall "×" symbol)
+  If you like the current wall aesthetic and only want cleaner
+  roads and better-looking cars.
+
+Option 3 — Cars only
+  If walls and roads are acceptable and only car rendering needs work.
+
+Please approve an option (or request changes to this plan)
+before implementation begins.
+
+=======================================================================
+END OF STRATEGY
+=======================================================================

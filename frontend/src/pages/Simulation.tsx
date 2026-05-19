@@ -76,9 +76,11 @@ const STATUS_CLASS: Record<WsStatus, string> = {
 };
 
 const COLORS = {
-  CAR_INITIAL: "#ef4444",
-  CAR_ARRIVING: "#eab308",
-  CAR_TEXT: "#000000",
+  CAR_INITIAL:       "#7c3aed",
+  CAR_INITIAL_GLOW:  "rgba(139,92,246,0.85)",
+  CAR_ARRIVING:      "#0ea5e9",
+  CAR_ARRIVING_GLOW: "rgba(56,189,248,0.85)",
+  CAR_TEXT: "#ffffff",
 };
 
 export default function Simulation() {
@@ -293,36 +295,44 @@ export default function Simulation() {
       const carLen = CELL_PX * 0.75;
       const carW   = CELL_PX * 0.45;
 
+      const isInit = isInitial === 1;
+      const carFill = isInit ? COLORS.CAR_INITIAL  : COLORS.CAR_ARRIVING;
+      const carGlow = isInit ? COLORS.CAR_INITIAL_GLOW : COLORS.CAR_ARRIVING_GLOW;
+
       ctx.save();
       ctx.translate(px, py);
-      ctx.fillStyle = isInitial === 1 ? COLORS.CAR_INITIAL : COLORS.CAR_ARRIVING;
+
+      // glow halo
+      ctx.shadowColor = carGlow;
+      ctx.shadowBlur  = 10;
+
+      // car body
+      ctx.fillStyle = carFill;
       ctx.beginPath();
       if (typeof ctx.roundRect === "function") {
-        ctx.roundRect(-carLen / 2, -carW / 2, carLen, carW, 4);
+        ctx.roundRect(-carLen / 2, -carW / 2, carLen, carW, 5);
       } else {
         ctx.rect(-carLen / 2, -carW / 2, carLen, carW);
       }
       ctx.fill();
-      ctx.strokeStyle = "rgba(0,0,0,0.5)";
-      ctx.lineWidth = 1;
+
+      // lit edge stroke
+      ctx.shadowBlur  = 0;
+      ctx.strokeStyle = "rgba(255,255,255,0.30)";
+      ctx.lineWidth   = 1;
       ctx.stroke();
 
-      ctx.fillStyle = "rgba(0,0,0,0.6)";
-      ctx.fillRect( carLen / 6,     -carW / 2 + 2, 3, carW - 4);
-      ctx.fillRect(-carLen / 2 + 2, -carW / 2 + 2, 3, carW - 4);
-
-      ctx.fillStyle = "rgba(255,255,200,0.9)";
-      ctx.beginPath();
-      ctx.arc(carLen / 2 - 2, -carW / 2 + 3, 1.5, 0, Math.PI * 2);
-      ctx.arc(carLen / 2 - 2,  carW / 2 - 3, 1.5, 0, Math.PI * 2);
-      ctx.fill();
       ctx.restore();
 
-      ctx.fillStyle = COLORS.CAR_TEXT;
-      ctx.font = "bold 9px sans-serif";
-      ctx.textAlign = "center";
+      // ID label (drawn outside save/restore so shadow doesn't bleed)
+      ctx.shadowColor = "rgba(0,0,0,0.9)";
+      ctx.shadowBlur  = 3;
+      ctx.fillStyle   = COLORS.CAR_TEXT;
+      ctx.font        = "bold 9px sans-serif";
+      ctx.textAlign   = "center";
       ctx.textBaseline = "middle";
       ctx.fillText(id.slice(0, 3), px, py);
+      ctx.shadowBlur  = 0;
     });
   }, [renderTick, viewMode, canvasSize, gridData]);
 

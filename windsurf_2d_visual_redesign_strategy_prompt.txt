@@ -1,0 +1,98 @@
+Context:
+I have a project with both 2D and 3D simulations for an Autonomous Parking Lot Simulator.
+The current 2D simulation works functionally and the logic is good.
+The main issue now is visual quality: the 2D simulation looks ugly in my opinion, and I want to improve the design without breaking the existing simulation logic.
+
+Important:
+Do NOT implement anything yet.
+Your task is to inspect the current 2D simulation implementation and create a strategy/design plan only.
+Once I review the plan, I will approve the preferred direction, and only then you can start implementing.
+
+Current 2D objects:
+- Walls
+- Roads
+- Parking spots
+- Entrance
+- Exit
+- Cars
+
+Objects I am satisfied with:
+- Parking spots
+- Entrance
+- Exit
+
+Objects I want to visually improve:
+- Cars
+- Walls
+- Roads
+
+Main goal:
+Make the 2D simulation look cleaner, more modern, and more visually appealing, while keeping the current behavior, coordinates, simulation logic, and performance stable.
+
+Please analyze the existing 2D rendering code and propose the best visual improvement strategy.
+
+Things to consider:
+1. Cars
+   - Current car design does not look good enough.
+   - Think about better ways to draw cars directly using canvas/SVG/CSS/React shapes, depending on how the project currently renders them.
+   - Consider whether to use simple custom-drawn cars with rounded rectangles, windows, direction indicators, shadows, or small details.
+   - Also consider whether using car image assets/SVG assets would be better.
+   - The car design must still clearly show direction/movement.
+   - The car design should not hurt performance when many cars are displayed.
+
+2. Walls
+   - Current walls look visually unattractive.
+   - Suggest a better style for walls.
+   - Possible ideas: darker blocks, subtle texture, border/shadow, rounded corners, or a clean tile-like appearance.
+   - Avoid anything too heavy or visually noisy.
+
+3. Roads
+   - Current roads look unattractive.
+   - Suggest a better road design.
+   - Possible ideas: light/dark asphalt color, lane markings, subtle grid, borders, or a clean minimal road texture.
+   - Make sure roads remain readable and do not make cars/parking spots harder to see.
+
+4. Assets vs drawing
+   - Compare the options:
+     a. Drawing everything manually with CSS/canvas/SVG shapes.
+     b. Using local SVG/image assets.
+     c. A hybrid approach, for example drawing roads/walls manually and using SVG cars.
+   - Explain pros and cons of each option.
+   - Recommend the simplest and safest approach for this project.
+
+5. Performance and maintainability
+   - The solution should not significantly harm performance.
+   - Avoid expensive rendering techniques if the simulation can contain many cars or large parking lots.
+   - Prefer a solution that is easy to tweak later.
+   - Avoid changing the simulation state, route logic, grid logic, or backend logic unless absolutely necessary.
+
+6. Responsiveness / integration
+   - Make sure the visual redesign fits with the existing 2D viewport behavior.
+   - Do not affect the working 3D simulation.
+   - Keep the change isolated to the 2D simulation rendering/design layer as much as possible.
+
+What I want you to produce:
+Create a strategy document that includes:
+
+1. A short summary of the current visual problem.
+2. Where in the code the 2D rendering/design is handled.
+3. The recommended approach for improving cars, walls, and roads.
+4. Alternative approaches and why they are less preferred.
+5. A proposed visual style guide:
+   - colors
+   - shapes
+   - borders
+   - shadows
+   - car design details
+   - wall design details
+   - road design details
+6. A safe implementation plan divided into small phases.
+7. Risks and how to avoid them.
+8. Exact files/components likely to be changed.
+9. A clear note saying implementation must wait for my approval.
+
+Preferred direction, unless you find a better reason otherwise:
+Start by recommending the simplest, lowest-risk visual improvement that keeps rendering lightweight and does not introduce unnecessary dependencies.
+
+Do not implement yet.
+Only create the strategy/design plan first.
