@@ -1,5 +1,5 @@
 from typing import Dict, List, Literal, Optional, Any, Tuple
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 # --- Request DTOs ---
 
@@ -73,14 +73,16 @@ class SimulationMetaDTO(BaseModel):
     average_steps_to_exit: Optional[float] = None
 
 class SimulationHistoryItemDTO(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: str
     name: Optional[str] = "Untitled"
     created_at: Any
     parking_lot_id: Optional[str]
     grid_width: Optional[int]
     grid_height: Optional[int]
-    
-    initial_cars_configured: int
+
+    initial_cars_configured: int = Field(default=0, validation_alias="initial_active_cars_configured")
 
     total_steps: int
     total_cars: int
@@ -88,7 +90,7 @@ class SimulationHistoryItemDTO(BaseModel):
     total_failed_plans: int
     status: str
 
-    total_exited: int
+    total_exited: int = Field(default=0, validation_alias="initial_active_cars_exited")
     arriving_cars_spawned: int
     arriving_cars_parked: int
 
