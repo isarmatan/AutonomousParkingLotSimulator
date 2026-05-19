@@ -65,10 +65,26 @@ type Timestep = {
 
 type WsStatus = "IDLE" | "CONNECTING" | "RUNNING" | "PAUSED" | "STOPPED" | "COMPLETED" | "ERROR";
 
+type LogEvent = {
+  step: number;
+  car_id: string;
+  event_type: "entered_lot" | "exited_lot" | "intent_park_to_exit" | "intent_exit_to_park";
+  message: string;
+};
+
 const API_URL = "http://127.0.0.1:8000";
 const WS_URL  = "ws://127.0.0.1:8000";
 const CONFIG_KEY = "sim_config_v3";
 const LAYOUT_KEY = "parking_layout_v1";
+
+const MAX_LOG_ENTRIES = 300;
+
+const EVENT_ICONS: Record<string, string> = {
+  entered_lot:        "→",
+  exited_lot:         "←",
+  intent_park_to_exit: "↑",
+  intent_exit_to_park: "↓",
+};
 
 const STATUS_CLASS: Record<WsStatus, string> = {
   IDLE: "default", CONNECTING: "default", RUNNING: "success",
@@ -98,12 +114,15 @@ export default function Simulation() {
   const [viewMode, setViewMode]     = useState<"2D" | "3D">("3D");
   const [liveTimesteps, setLiveTimesteps] = useState<Timestep[]>([]);
   const [renderTick, setRenderTick] = useState(0);
+  const [logEvents, setLogEvents]   = useState<LogEvent[]>([]);
 
   // ---- Refs ----
-  const wsRef       = useRef<WebSocket | null>(null);
-  const liveCarsRef = useRef<Record<string, [number, number, number]>>({});
-  const prevCarsRef = useRef<Record<string, [number, number, number]>>({});
-  const canvasRef   = useRef<HTMLCanvasElement>(null);
+  const wsRef           = useRef<WebSocket | null>(null);
+  const liveCarsRef     = useRef<Record<string, [number, number, number]>>({});
+  const prevCarsRef     = useRef<Record<string, [number, number, number]>>({});
+  const canvasRef       = useRef<HTMLCanvasElement>(null);
+  const logRef          = useRef<HTMLDivElement>(null);
+  const userScrolledRef = useRef(false);
 
   // 2D view constants
   const CELL_PX    = 32;
@@ -176,6 +195,8 @@ export default function Simulation() {
             setLiveTimesteps([]);
             setLiveT(0);
             setLiveStats(null);
+            setLogEvents([]);
+            userScrolledRef.current = false;
             setLoading(false);
             setWsStatus("RUNNING");
 
@@ -187,6 +208,9 @@ export default function Simulation() {
             setLiveT(msg.t);
             setLiveStats(msg.stats);
             setRenderTick((n) => n + 1);
+            if (msg.events?.length) {
+              setLogEvents(prev => [...prev, ...(msg.events as LogEvent[])].slice(-MAX_LOG_ENTRIES));
+            }
             setLiveTimesteps([
               { t: msg.t - 1, cars: prev },
               { t: msg.t,     cars },
@@ -239,7 +263,15 @@ export default function Simulation() {
     setLiveT(0);
     setLiveStats(null);
     setLiveTimesteps([]);
+    setLogEvents([]);
+    userScrolledRef.current = false;
     send({ type: "RESET" });
+  };
+
+  const handleLogScroll = () => {
+    const el = logRef.current;
+    if (!el) return;
+    userScrolledRef.current = el.scrollHeight - el.scrollTop - el.clientHeight > 40;
   };
 
   const isConnected = wsStatus === "RUNNING" || wsStatus === "PAUSED";
@@ -254,6 +286,13 @@ export default function Simulation() {
       height: PADDING_PX * 2 + h * CELL_PX + (h - 1) * GAP_PX,
     };
   }, [gridData]);
+
+  // ---- Auto-scroll log to bottom ----
+  useEffect(() => {
+    if (userScrolledRef.current) return;
+    const el = logRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [logEvents]);
 
   // ---- Track window size for auto-fit recalculation ----
   useEffect(() => {
@@ -583,6 +622,21 @@ export default function Simulation() {
                     </div>
                     </div>
                   )}
+                </div>
+              )}
+              {viewMode === "2D" && (
+                <div className="simEventLog" ref={logRef} onScroll={handleLogScroll}>
+                  <div className="simEventLogHeader">
+                    <span className="simEventLogTitle">Event Log</span>
+                    <span className="simEventLogBadge">{logEvents.length}</span>
+                  </div>
+                  {logEvents.map((ev, i) => (
+                    <div key={i} className={`logEntry logEntry--${ev.event_type}`}>
+                      <span className="logEntry__icon">{EVENT_ICONS[ev.event_type] ?? "•"}</span>
+                      <span className="logEntry__msg">{ev.message}</span>
+                      <span className="logEntry__step">t={ev.step}</span>
+                    </div>
+                  ))}
                 </div>
               )}
             </div>

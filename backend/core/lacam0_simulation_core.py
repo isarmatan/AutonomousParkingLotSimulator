@@ -63,6 +63,8 @@ class LaCAM0SimulationCore:
         self.sum_steps_to_park: int = 0
         self.sum_steps_to_exit: int = 0
 
+        self.pending_events: list = []
+
         self._initialize_cars()
 
     # ------------------------------------------------------------------
@@ -91,11 +93,20 @@ class LaCAM0SimulationCore:
             self.parking_manager.mark_occupied(car, pos)
             self.total_parked += 1
 
+    def _emit_event(self, car_id, event_type: str, message: str):
+        self.pending_events.append({
+            "step": self.time,
+            "car_id": str(car_id),
+            "event_type": event_type,
+            "message": message,
+        })
+
     # ------------------------------------------------------------------
     # Step
     # ------------------------------------------------------------------
 
     def step(self):
+        self.pending_events = []
         self._cleanup_exited_cars()
         self._process_parked_car_exits()
         self._maybe_poisson_arrival()
@@ -132,6 +143,7 @@ class LaCAM0SimulationCore:
         car.intent = "EXIT"
         car.exit_start_time = self.time
         self.active_cars[car.car_id] = car
+        self._emit_event(car.car_id, "intent_park_to_exit", f"Car {car.car_id} has changed its intent from parking to exiting")
 
         goal = self.parking_manager.assign_goal(car, self.time)
         car.goal = goal
@@ -171,6 +183,7 @@ class LaCAM0SimulationCore:
         self.car_positions[car.car_id] = car.current_position
         self.all_cars[car.car_id] = car
         self.total_arrived += 1
+        self._emit_event(car.car_id, "entered_lot", f"Car {car.car_id} has entered the lot")
 
         goal = self.parking_manager.assign_goal(car, self.time)
         car.goal = goal
@@ -236,6 +249,7 @@ class LaCAM0SimulationCore:
         self.sum_steps_to_exit += self.time - getattr(car, "exit_start_time", self.time)
         self.exited_car_ids.add(car_id)
         self.cars_pending_removal.add(car_id)
+        self._emit_event(car_id, "exited_lot", f"Car {car_id} has exited the lot")
         car.clear_path()
         del self.active_cars[car_id]
         if self.ghost_exit_manager is not None:

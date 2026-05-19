@@ -61,6 +61,8 @@ class SimulationCore:
         self.sum_steps_to_park = 0
         self.sum_steps_to_exit = 0
 
+        self.pending_events: list = []
+
         self._initialize_cars()
 
     # -------------------------------------------------
@@ -92,6 +94,14 @@ class SimulationCore:
                 pos[0], pos[1], start_time=0, horizon=self.config.goal_reserve_horizon
             )
             self.total_parked += 1
+
+    def _emit_event(self, car_id, event_type: str, message: str):
+        self.pending_events.append({
+            "step": self.time,
+            "car_id": str(car_id),
+            "event_type": event_type,
+            "message": message,
+        })
 
     # -------------------------------------------------
     # Runtime helpers
@@ -134,6 +144,7 @@ class SimulationCore:
         car.intent = "EXIT"
         car.exit_start_time = self.time
         self.active_cars[car.car_id] = car
+        self._emit_event(car.car_id, "intent_park_to_exit", f"Car {car.car_id} has changed its intent from parking to exiting")
 
         goal = self.parking_manager.assign_goal(car, self.time)
         car.goal = goal
@@ -174,6 +185,7 @@ class SimulationCore:
         self.car_positions[car.car_id] = car.current_position
         self.all_cars[car.car_id] = car
         self.total_arrived += 1
+        self._emit_event(car.car_id, "entered_lot", f"Car {car.car_id} has entered the lot")
 
         # Note: We assign goal based on CURRENT time state, but plan for FUTURE start
         # Ideally assign_goal should also know about future? 
@@ -208,6 +220,7 @@ class SimulationCore:
                  self.parking_manager.release_assigned_spot(car.car_id)
                  car.intent = "EXIT"
                  car.goal = self.parking_manager.assign_goal(car, start_time)
+                 self._emit_event(car.car_id, "intent_park_to_exit", f"Car {car.car_id} has changed its intent from parking to exiting")
 
     def _advance_cars(self):
         """Move active cars along their planned paths with collision resolution."""
@@ -267,6 +280,7 @@ class SimulationCore:
                     self.parking_manager.release_assigned_spot(car.car_id)
                     car.intent = "EXIT"
                     car.goal = self.parking_manager.assign_goal(car, self.time)
+                    self._emit_event(car_id, "intent_park_to_exit", f"Car {car_id} has changed its intent from parking to exiting")
             else:
                 car.plan_fail_count = 0
 
@@ -414,7 +428,7 @@ class SimulationCore:
                          # if car_id in self.car_positions:
                          #    del self.car_positions[car_id]
                          self.cars_pending_removal.add(car_id)
-                         
+                         self._emit_event(car_id, "exited_lot", f"Car {car_id} has exited the lot")
                          car.clear_path()
 
                     del self.active_cars[car_id]
@@ -436,6 +450,7 @@ class SimulationCore:
                         self.parking_manager.release_assigned_spot(car.car_id)
                         car.intent = "EXIT"
                         car.goal = self.parking_manager.assign_goal(car, self.time)
+                        self._emit_event(car_id, "intent_park_to_exit", f"Car {car_id} has changed its intent from parking to exiting")
                     # Do NOT call step()
                 else:
                     # It wanted to stay put (or finished path).
@@ -477,6 +492,7 @@ class SimulationCore:
                                  # if car_id in self.car_positions:
                                  #    del self.car_positions[car_id]
                                  self.cars_pending_removal.add(car_id)
+                                 self._emit_event(car_id, "exited_lot", f"Car {car_id} has exited the lot")
 
                                  car.clear_path()
                                      
@@ -566,6 +582,7 @@ class SimulationCore:
         self.cars_pending_removal.clear()
 
     def step(self):
+        self.pending_events = []
         self._cleanup_exited_cars()
         self._process_parked_car_exits()
         self._advance_cars()

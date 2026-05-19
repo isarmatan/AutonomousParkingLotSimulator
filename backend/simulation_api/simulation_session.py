@@ -161,7 +161,7 @@ class SimulationSession:
             "average_steps_to_exit": avg_exit,
         }
 
-        await self._send({"type": "STEP", "t": sim.time, "cars": cars, "stats": stats})
+        await self._send({"type": "STEP", "t": sim.time, "cars": cars, "stats": stats, "events": list(sim.pending_events)})
 
     async def _send_status(self, status: str):
         self.status = status
