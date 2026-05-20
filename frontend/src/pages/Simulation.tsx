@@ -15,6 +15,7 @@ type SimConfig = {
   max_timesteps: number;
   step_delay_ms: number;
   algorithm: string;
+  headless_mode?: boolean;
 };
 
 type LiveSimulationRequest = SimConfig & {
@@ -79,6 +80,39 @@ type LogEvent = {
   message: string;
 };
 
+type HeadlessResult = {
+  mode: string;
+  algorithm: string;
+  max_steps: number;
+  completed_steps: number;
+  stopped_reason: string;
+  status: string;
+  grid_width: number;
+  grid_height: number;
+  parking_lot_id?: string;
+  initial_cars_configured: number;
+  max_arriving_cars_configured: number;
+  total_cars: number;
+  total_parked: number;
+  total_failed_plans: number;
+  total_exited: number;
+  arriving_cars_spawned: number;
+  arriving_cars_parked: number;
+  average_steps_to_park?: number;
+  average_steps_to_exit?: number;
+  avg_trip_duration_steps?: number;
+  max_trip_duration_steps?: number;
+  min_trip_duration_steps?: number;
+  total_completed_trips: number;
+  avg_planner_ms?: number;
+  max_planner_ms?: number;
+  planner_call_count: number;
+  cpu_usage_avg_percent?: number;
+  cpu_usage_peak_percent?: number;
+  memory_usage_avg_mb?: number;
+  memory_usage_peak_mb?: number;
+};
+
 const API_URL = "http://127.0.0.1:8000";
 const WS_URL  = "ws://127.0.0.1:8000";
 const CONFIG_KEY = "sim_config_v3";
@@ -126,6 +160,8 @@ export default function Simulation() {
   const [saveModalOpen, setSaveModalOpen] = useState(false);
   const [saveName, setSaveName]     = useState("");
   const [saving, setSaving]         = useState(false);
+  const [headlessResult, setHeadlessResult] = useState<HeadlessResult | null>(null);
+  const [headlessRunning, setHeadlessRunning] = useState(false);
 
   // ---- Refs ----
   const wsRef           = useRef<WebSocket | null>(null);
@@ -178,6 +214,28 @@ export default function Simulation() {
         } else {
           throw new Error("No layout specified.");
         }
+
+        // --- Headless Mode Branch ---
+        if (config.headless_mode) {
+          setHeadlessRunning(true);
+          setWsStatus("IDLE");
+          const headlessPayload = { ...basePayload, max_steps: config.max_timesteps };
+          const hRes = await fetch(`${API_URL}/simulation/headless`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(headlessPayload),
+          });
+          if (!hRes.ok) {
+            const txt = await hRes.text();
+            throw new Error(`Headless simulation failed: ${hRes.statusText}\n${txt}`);
+          }
+          const result: HeadlessResult = await hRes.json();
+          setHeadlessResult(result);
+          setHeadlessRunning(false);
+          setLoading(false);
+          return;
+        }
+        // --- Visual Mode ---
 
         const res = await fetch(`${API_URL}/simulation/start`, {
           method: "POST",
@@ -290,17 +348,31 @@ export default function Simulation() {
   const isConnected = wsStatus === "RUNNING" || wsStatus === "PAUSED";
 
   const canSave = (wsStatus === "PAUSED" || wsStatus === "COMPLETED") && sessionId !== null;
+  const canSaveHeadless = headlessResult !== null;
 
   const handleSave = async () => {
-    if (!sessionId) return;
     setSaving(true);
     try {
-      const res = await fetch(`${API_URL}/simulation/${sessionId}/snapshot`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: saveName.trim() || "Untitled" }),
-      });
-      if (!res.ok) throw new Error(await res.text());
+      if (headlessResult) {
+        const res = await fetch(`${API_URL}/simulation/headless/save`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            name: saveName.trim() || "Untitled",
+            result: headlessResult,
+            config_json: sessionStorage.getItem(CONFIG_KEY),
+          }),
+        });
+        if (!res.ok) throw new Error(await res.text());
+      } else {
+        if (!sessionId) return;
+        const res = await fetch(`${API_URL}/simulation/${sessionId}/snapshot`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name: saveName.trim() || "Untitled" }),
+        });
+        if (!res.ok) throw new Error(await res.text());
+      }
       setSaveModalOpen(false);
       setSaveName("");
     } catch (e: unknown) {
@@ -491,7 +563,7 @@ export default function Simulation() {
               </div>
             )}
 
-            {!loading && !error && (
+            {!loading && !error && !headlessResult && (
               <>
                 <span className="stepCounter">Step {liveT}</span>
                 <div className="controlGroup">
@@ -519,7 +591,7 @@ export default function Simulation() {
               </>
             )}
 
-            {canSave && (
+            {(canSave || canSaveHeadless) && (
               <button className="btnSave" onClick={() => { setSaveName(""); setSaveModalOpen(true); }}>
                 Save Run
               </button>
@@ -535,7 +607,73 @@ export default function Simulation() {
           {loading && (
             <div className="loadingContainer">
               <Loader2 className="spinner" size={48} />
-              <p>Connecting to simulation…</p>
+              <p>{headlessRunning ? "Running headless simulation…" : "Connecting to simulation…"}</p>
+            </div>
+          )}
+
+          {headlessResult && !loading && (
+            <div className="headlessResultPanel">
+              <div className="headlessResultHeader">
+                <div className="headlessResultBadge">
+                  <span className="headlessAlgoBadge">{headlessResult.algorithm.toUpperCase()}</span>
+                  <span className={`headlessStatusBadge ${headlessResult.status === "COMPLETED" ? "completed" : "partial"}`}>
+                    {headlessResult.status.replace(/_/g, " ")}
+                  </span>
+                </div>
+                <div className="headlessResultMeta">
+                  <span>{headlessResult.completed_steps.toLocaleString()} steps</span>
+                  <span>·</span>
+                  <span>{headlessResult.grid_width}×{headlessResult.grid_height} grid</span>
+                  <span>·</span>
+                  <span>{headlessResult.stopped_reason.replace(/_/g, " ")}</span>
+                </div>
+              </div>
+              <div className="headlessStatGrid">
+                <div className="headlessStatCard">
+                  <div className="headlessStatTitle">Exited</div>
+                  <div className="headlessStatVal">{headlessResult.total_exited}</div>
+                  <div className="headlessStatSub">avg {headlessResult.average_steps_to_exit?.toFixed(1) ?? "—"} steps</div>
+                </div>
+                <div className="headlessStatCard">
+                  <div className="headlessStatTitle">Arrivals Parked</div>
+                  <div className="headlessStatVal">{headlessResult.arriving_cars_parked} / {headlessResult.arriving_cars_spawned}</div>
+                  <div className="headlessStatSub">avg {headlessResult.average_steps_to_park?.toFixed(1) ?? "—"} steps</div>
+                </div>
+                <div className="headlessStatCard">
+                  <div className="headlessStatTitle">Failures</div>
+                  <div className="headlessStatVal">{headlessResult.total_failed_plans}</div>
+                  <div className="headlessStatSub">planning errors</div>
+                </div>
+                <div className="headlessStatCard">
+                  <div className="headlessStatTitle">Avg Trip</div>
+                  <div className="headlessStatVal">{headlessResult.avg_trip_duration_steps?.toFixed(1) ?? "—"}</div>
+                  <div className="headlessStatSub">steps · {headlessResult.total_completed_trips} trips</div>
+                </div>
+                <div className="headlessStatCard">
+                  <div className="headlessStatTitle">Trip Range</div>
+                  <div className="headlessStatVal">{headlessResult.min_trip_duration_steps ?? "—"} – {headlessResult.max_trip_duration_steps ?? "—"}</div>
+                  <div className="headlessStatSub">min – max steps</div>
+                </div>
+                <div className="headlessStatCard">
+                  <div className="headlessStatTitle">Avg Step Time</div>
+                  <div className="headlessStatVal">{headlessResult.avg_planner_ms?.toFixed(2) ?? "—"} ms</div>
+                  <div className="headlessStatSub">peak {headlessResult.max_planner_ms?.toFixed(2) ?? "—"} ms</div>
+                </div>
+                {headlessResult.cpu_usage_avg_percent != null && (
+                  <div className="headlessStatCard">
+                    <div className="headlessStatTitle">CPU Avg</div>
+                    <div className="headlessStatVal">{headlessResult.cpu_usage_avg_percent}%</div>
+                    <div className="headlessStatSub">peak {headlessResult.cpu_usage_peak_percent}%</div>
+                  </div>
+                )}
+                {headlessResult.memory_usage_avg_mb != null && (
+                  <div className="headlessStatCard">
+                    <div className="headlessStatTitle">Memory Avg</div>
+                    <div className="headlessStatVal">{headlessResult.memory_usage_avg_mb} MB</div>
+                    <div className="headlessStatSub">peak {headlessResult.memory_usage_peak_mb} MB</div>
+                  </div>
+                )}
+              </div>
             </div>
           )}
 

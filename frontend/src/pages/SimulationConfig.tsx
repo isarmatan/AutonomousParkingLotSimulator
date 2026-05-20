@@ -4,7 +4,7 @@ import AppLayout from "../layouts/AppLayout";
 import "./SimulationConfig.css";
 import bgHero from "../assets/HomePage.webp"; 
 
-import { Car, Activity, Clock, LogOut, LogIn, Hash, Cpu } from "lucide-react";
+import { Car, Activity, Clock, LogOut, LogIn, Hash, Cpu, Zap } from "lucide-react";
 
 type SimConfig = {
   planning_horizon: number;
@@ -15,6 +15,7 @@ type SimConfig = {
   max_timesteps: number;
   step_delay_ms: number;
   algorithm: string;
+  headless_mode: boolean;
 };
 
 const STORAGE_KEY = "sim_config_v3";
@@ -30,6 +31,7 @@ export default function SimulationConfig() {
   const [maxTimesteps, setMaxTimesteps] = useState<number>(0);
   const [stepDelayMs, setStepDelayMs] = useState<number>(100);
   const [algorithm, setAlgorithm] = useState<string>("priority");
+  const [headlessMode, setHeadlessMode] = useState<boolean>(false);
 
   const defaults = useMemo(
     () => ({
@@ -41,6 +43,7 @@ export default function SimulationConfig() {
       max_timesteps: 0,
       step_delay_ms: 100,
       algorithm: "priority",
+      headless_mode: false,
     }),
     []
   );
@@ -55,6 +58,7 @@ export default function SimulationConfig() {
       max_timesteps: Math.max(0, Math.floor(maxTimesteps)),
       step_delay_ms: Math.max(10, Math.floor(stepDelayMs)),
       algorithm,
+      headless_mode: headlessMode,
     };
 
     sessionStorage.setItem(STORAGE_KEY, JSON.stringify(cfg));
@@ -145,6 +149,15 @@ export default function SimulationConfig() {
               onDefault={() => setMaxTimesteps(defaults.max_timesteps)}
             />
 
+            <ToggleRow
+              icon={<Zap size={16} />}
+              label="Headless Mode"
+              description="Skip live rendering — run at full speed and return final statistics only."
+              hint={headlessMode && maxTimesteps === 0 ? "⚠ Max Timesteps must be ≥ 1 to use Headless Mode." : undefined}
+              checked={headlessMode}
+              onChange={setHeadlessMode}
+            />
+
              <FieldRow
               icon={<Clock size={16} />}
               label="Planning Horizon"
@@ -176,7 +189,12 @@ export default function SimulationConfig() {
             ← Back
           </button>
 
-          <button className="btnPrimary" onClick={saveAndContinue}>
+          <button
+            className="btnPrimary"
+            onClick={saveAndContinue}
+            disabled={headlessMode && maxTimesteps === 0}
+            title={headlessMode && maxTimesteps === 0 ? "Set Max Timesteps ≥ 1 to use Headless Mode" : undefined}
+          >
             Continue to Layout →
           </button>
         </div>
@@ -195,6 +213,38 @@ function CardHead(props: { icon: React.ReactNode; title: string; sub: string }) 
         {props.title}
       </h2>
       <p className="cardSub">{props.sub}</p>
+    </div>
+  );
+}
+
+function ToggleRow(props: {
+  icon?: React.ReactNode;
+  label: string;
+  description?: string;
+  hint?: string;
+  checked: boolean;
+  onChange: (v: boolean) => void;
+}) {
+  return (
+    <div className="fieldRow">
+      <div className="fieldTop">
+        <span className="fieldLabel">
+          {props.icon ? <span className="iconBadge" aria-hidden="true">{props.icon}</span> : null}
+          {props.label}
+        </span>
+        <label className="toggleSwitch">
+          <input
+            type="checkbox"
+            checked={props.checked}
+            onChange={e => props.onChange(e.target.checked)}
+          />
+          <span className="toggleTrack">
+            <span className="toggleThumb" />
+          </span>
+        </label>
+      </div>
+      {props.description ? <div className="fieldDescription">{props.description}</div> : null}
+      {props.hint ? <div className="fieldHint">{props.hint}</div> : null}
     </div>
   );
 }

@@ -171,3 +171,67 @@ class LiveSimulationRequest(BaseModel):
 class SessionInitResponse(BaseModel):
     session_id: str
     grid: Dict[str, Any]
+
+
+# --- Headless Simulation DTOs ---
+
+class HeadlessSimulationRequest(BaseModel):
+    source: Literal["generate", "load"]
+    width: Optional[int] = None
+    height: Optional[int] = None
+    rules: Optional[SimulationRulesDTO] = None
+    parkingLotId: Optional[str] = None
+
+    planning_horizon: int = 50
+    goal_reserve_horizon: int = 200
+    arrival_lambda: float = 0.3
+    exit_rate: float = 0.02
+    initial_cars: int = 5
+    max_arriving_cars: int = 0  # 0 = unlimited
+    algorithm: str = "priority"
+    max_steps: int  # required — validated in endpoint
+
+
+class HeadlessResultDTO(BaseModel):
+    mode: str = "headless"
+    algorithm: str
+    max_steps: int
+    completed_steps: int
+    stopped_reason: str  # "max_steps_reached" | "all_cars_completed"
+    status: str          # "COMPLETED" | "MAX_STEPS_REACHED"
+
+    grid_width: int
+    grid_height: int
+    parking_lot_id: Optional[str] = None
+
+    initial_cars_configured: int
+    max_arriving_cars_configured: int
+    total_cars: int
+    total_parked: int
+    total_failed_plans: int
+    total_exited: int
+    arriving_cars_spawned: int
+    arriving_cars_parked: int
+
+    average_steps_to_park: Optional[float] = None
+    average_steps_to_exit: Optional[float] = None
+    avg_trip_duration_steps: Optional[float] = None
+    max_trip_duration_steps: Optional[int] = None
+    min_trip_duration_steps: Optional[int] = None
+    total_completed_trips: int = 0
+
+    avg_planner_ms: Optional[float] = None
+    max_planner_ms: Optional[float] = None
+    planner_call_count: int = 0
+
+    cpu_usage_avg_percent: Optional[float] = None
+    cpu_usage_peak_percent: Optional[float] = None
+    memory_usage_avg_mb: Optional[float] = None
+    memory_usage_peak_mb: Optional[float] = None
+    machine_specs: Optional[Dict[str, Any]] = None
+
+
+class HeadlessSaveRequest(BaseModel):
+    name: str = "Untitled"
+    result: HeadlessResultDTO
+    config_json: Optional[str] = None

@@ -128,17 +128,6 @@ class SimulationCore:
         if self.min_trip_duration is None or duration < self.min_trip_duration:
             self.min_trip_duration = duration
 
-    def _timed_plan(self, car, *args, **kwargs) -> bool:
-        """Call planner and record wall-clock time."""
-        t0 = time.perf_counter()
-        ok = self.planner.plan_for_car(car, *args, **kwargs)
-        elapsed_ms = (time.perf_counter() - t0) * 1000.0
-        self.planner_call_count += 1
-        self.sum_planner_ms += elapsed_ms
-        if elapsed_ms > self.max_planner_ms:
-            self.max_planner_ms = elapsed_ms
-        return ok
-
     # -------------------------------------------------
     # Runtime helpers
     # -------------------------------------------------
@@ -190,7 +179,7 @@ class SimulationCore:
             return
 
         obstacles = self._get_unplanned_obstacles(exclude_car_id=car.car_id)
-        ok = self._timed_plan(car, self.time, obstacles=obstacles)
+        ok = self.planner.plan_for_car(car, self.time, obstacles=obstacles)
         if not ok:
             self.total_failed_plans += 1
             car.plan_fail_count += 1
@@ -237,7 +226,7 @@ class SimulationCore:
 
         obstacles = self._get_unplanned_obstacles(exclude_car_id=car.car_id)
         
-        ok = self._timed_plan(car, start_time, obstacles=obstacles)
+        ok = self.planner.plan_for_car(car, start_time, obstacles=obstacles)
         if ok:
              self.total_planned += 1
              car.plan_fail_count = 0
@@ -294,7 +283,7 @@ class SimulationCore:
             # Randomized persistence to break symmetry in deadlocks
             persistence = random.randint(10, 30)
             
-            ok = self._timed_plan(
+            ok = self.planner.plan_for_car(
                 car,
                 self.time,
                 obstacles=obstacles,
@@ -625,10 +614,16 @@ class SimulationCore:
 
     def step(self):
         self.pending_events = []
+        t0 = time.perf_counter()
         self._cleanup_exited_cars()
         self._process_parked_car_exits()
         self._advance_cars()
         self._maybe_poisson_arrival()
+        elapsed_ms = (time.perf_counter() - t0) * 1000.0
+        self.planner_call_count += 1
+        self.sum_planner_ms += elapsed_ms
+        if elapsed_ms > self.max_planner_ms:
+            self.max_planner_ms = elapsed_ms
         self.time += 1
 
     def run(self) -> Dict[str, int]:

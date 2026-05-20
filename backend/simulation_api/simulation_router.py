@@ -31,8 +31,11 @@ from .simulation_dtos import (
     SnapshotRequest,
     LiveSimulationRequest,
     SessionInitResponse,
+    HeadlessSimulationRequest,
+    HeadlessResultDTO,
+    HeadlessSaveRequest,
 )
-from .simulation_session import SimulationSession
+from .simulation_session import SimulationSession, _collect_machine_specs
 from . import simulation_manager
 
 router = APIRouter(prefix="/simulation", tags=["simulation"])
@@ -220,6 +223,171 @@ def save_session_snapshot(
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
     snap = session.build_snapshot(name=req.name)
+    repo = SimulationRepository(db)
+    return repo.save_snapshot(snap)
+
+
+@router.post("/headless", response_model=HeadlessResultDTO)
+def run_headless_simulation(req: HeadlessSimulationRequest, db: Session = Depends(get_db)):
+    """Run a simulation without live rendering and return final statistics only."""
+    if req.max_steps <= 0:
+        raise HTTPException(status_code=422, detail="max_steps must be >= 1 for headless mode")
+
+    grid = _acquire_grid(req, db)
+    parking_cells, exit_cells, entry_cells = _extract_cells(grid)
+    total_spots = len(parking_cells)
+
+    if req.initial_cars > total_spots:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Requested {req.initial_cars} initial cars, but grid only has {total_spots} parking spots.",
+        )
+
+    effective_max_arriving = req.max_arriving_cars if req.max_arriving_cars > 0 else 999_999
+    cfg = SimulationConfig(
+        planning_horizon=req.planning_horizon,
+        goal_reserve_horizon=req.goal_reserve_horizon,
+        arrival_lambda=req.arrival_lambda,
+        exit_rate=req.exit_rate,
+        initial_cars=req.initial_cars,
+        max_arriving_cars=effective_max_arriving,
+    )
+
+    if req.algorithm == "lacam0":
+        ghost_mgr = GhostExitManager(grid.width, grid.height, exit_cells)
+        pm = LaCAM0ParkingManager(
+            grid=grid, parking_cells=parking_cells,
+            exit_cells=exit_cells, entry_cells=entry_cells,
+            ghost_exit_manager=ghost_mgr,
+        )
+        simulation = LaCAM0SimulationCore(
+            grid=grid, parking_manager=pm, config=cfg,
+            batch_planner=LaCAM0BatchPlanner(), ghost_exit_manager=ghost_mgr,
+        )
+    else:
+        pm = ParkingManager(
+            grid=grid, parking_cells=parking_cells,
+            exit_cells=exit_cells, entry_cells=entry_cells,
+        )
+        planner = planner_manager.create_planner(
+            algorithm=req.algorithm, grid=grid,
+            reservation_table=ReservationTable(),
+            planning_horizon=req.planning_horizon,
+        )
+        simulation = SimulationCore(grid=grid, parking_manager=pm, planner=planner, config=cfg)
+
+    # psutil sampling setup
+    try:
+        import psutil as _ps
+        _proc = _ps.Process()
+        _proc.cpu_percent(interval=None)  # prime the counter
+    except Exception:
+        _proc = None
+    cpu_sum = cpu_peak = mem_sum = mem_peak = 0.0
+    sample_count = 0
+
+    # Main headless loop — no frame capture, no step delay
+    completed = False
+    try:
+        for _ in range(req.max_steps):
+            simulation.step()
+            if _proc and simulation.time % 20 == 0:
+                try:
+                    cpu = _proc.cpu_percent(interval=None)
+                    mem_mb = _proc.memory_info().rss / (1024 * 1024)
+                    cpu_sum += cpu; mem_sum += mem_mb; sample_count += 1
+                    if cpu > cpu_peak: cpu_peak = cpu
+                    if mem_mb > mem_peak: mem_peak = mem_mb
+                except Exception:
+                    pass
+            if not simulation.active_cars:
+                if simulation.arriving_cars_created >= cfg.max_arriving_cars:
+                    completed = True; break
+                if cfg.arrival_lambda == 0:
+                    completed = True; break
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Simulation error: {e}")
+
+    sim = simulation
+    avg_park = sim.sum_steps_to_park / sim.arriving_cars_parked_count if sim.arriving_cars_parked_count > 0 else None
+    avg_exit = sim.sum_steps_to_exit / sim.total_exit_journeys if sim.total_exit_journeys > 0 else None
+    avg_trip = sim.sum_trip_durations / sim.total_completed_trips if sim.total_completed_trips > 0 else None
+    avg_plan = sim.sum_planner_ms / sim.planner_call_count if sim.planner_call_count > 0 else None
+    cpu_avg  = round(cpu_sum / sample_count, 1) if sample_count > 0 else None
+    mem_avg  = round(mem_sum / sample_count, 1) if sample_count > 0 else None
+
+    parking_lot_id = req.parkingLotId if req.source == "load" else None
+    return HeadlessResultDTO(
+        algorithm=req.algorithm,
+        max_steps=req.max_steps,
+        completed_steps=sim.time,
+        stopped_reason="all_cars_completed" if completed else "max_steps_reached",
+        status="COMPLETED" if completed else "MAX_STEPS_REACHED",
+        grid_width=grid.width,
+        grid_height=grid.height,
+        parking_lot_id=parking_lot_id,
+        initial_cars_configured=req.initial_cars,
+        max_arriving_cars_configured=req.max_arriving_cars,
+        total_cars=sim.config.initial_cars + sim.arriving_cars_created,
+        total_parked=sim.total_parked,
+        total_failed_plans=sim.total_failed_plans,
+        total_exited=sim.total_exited,
+        arriving_cars_spawned=sim.arriving_cars_created,
+        arriving_cars_parked=sim.arriving_cars_parked_count,
+        average_steps_to_park=round(avg_park, 2) if avg_park is not None else None,
+        average_steps_to_exit=round(avg_exit, 2) if avg_exit is not None else None,
+        avg_trip_duration_steps=round(avg_trip, 2) if avg_trip is not None else None,
+        max_trip_duration_steps=sim.max_trip_duration if sim.total_completed_trips > 0 else None,
+        min_trip_duration_steps=sim.min_trip_duration,
+        total_completed_trips=sim.total_completed_trips,
+        avg_planner_ms=round(avg_plan, 3) if avg_plan is not None else None,
+        max_planner_ms=round(sim.max_planner_ms, 3) if sim.planner_call_count > 0 else None,
+        planner_call_count=sim.planner_call_count,
+        cpu_usage_avg_percent=cpu_avg,
+        cpu_usage_peak_percent=round(cpu_peak, 1) if sample_count > 0 else None,
+        memory_usage_avg_mb=mem_avg,
+        memory_usage_peak_mb=round(mem_peak, 1) if sample_count > 0 else None,
+        machine_specs=_collect_machine_specs(),
+    )
+
+
+@router.post("/headless/save", response_model=SimulationHistoryItemDTO)
+def save_headless_result(req: HeadlessSaveRequest, db: Session = Depends(get_db)):
+    """Persist a completed headless simulation result to the DB."""
+    import json as _json
+    r = req.result
+    snap = {
+        "name": req.name,
+        "algorithm": r.algorithm,
+        "parking_lot_id": r.parking_lot_id,
+        "grid_width": r.grid_width,
+        "grid_height": r.grid_height,
+        "config_json": req.config_json,
+        "initial_cars": r.initial_cars_configured,
+        "max_arriving_cars": r.max_arriving_cars_configured,
+        "total_steps": r.completed_steps,
+        "total_cars": r.total_cars,
+        "total_parked": r.total_parked,
+        "total_failed_plans": r.total_failed_plans,
+        "status": r.status,
+        "total_exited": r.total_exited,
+        "arriving_cars_spawned": r.arriving_cars_spawned,
+        "arriving_cars_parked": r.arriving_cars_parked,
+        "average_steps_to_park": r.average_steps_to_park,
+        "average_steps_to_exit": r.average_steps_to_exit,
+        "avg_trip_duration_steps": r.avg_trip_duration_steps,
+        "max_trip_duration_steps": r.max_trip_duration_steps,
+        "min_trip_duration_steps": r.min_trip_duration_steps,
+        "total_completed_trips": r.total_completed_trips,
+        "avg_planner_ms": r.avg_planner_ms,
+        "max_planner_ms": r.max_planner_ms,
+        "planner_call_count": r.planner_call_count,
+        "cpu_usage_avg_percent": r.cpu_usage_avg_percent,
+        "cpu_usage_peak_percent": r.cpu_usage_peak_percent,
+        "memory_usage_avg_mb": r.memory_usage_avg_mb,
+        "memory_usage_peak_mb": r.memory_usage_peak_mb,
+        "machine_specs_json": _json.dumps(r.machine_specs) if r.machine_specs else None,
+    }
     repo = SimulationRepository(db)
     return repo.save_snapshot(snap)
 
