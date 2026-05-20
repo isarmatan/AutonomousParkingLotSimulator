@@ -2,6 +2,7 @@
 from dataclasses import dataclass
 from typing import Dict, List, Tuple, Optional
 import random
+import time
 from generator.cell import CellType
 from planning.base_planner import BasePlanner
 Position = Tuple[int, int]
@@ -63,6 +64,15 @@ class SimulationCore:
 
         self.pending_events: list = []
 
+        self.sum_trip_durations: int = 0
+        self.total_completed_trips: int = 0
+        self.max_trip_duration: int = 0
+        self.min_trip_duration: Optional[int] = None
+
+        self.planner_call_count: int = 0
+        self.sum_planner_ms: float = 0.0
+        self.max_planner_ms: float = 0.0
+
         self._initialize_cars()
 
     # -------------------------------------------------
@@ -102,6 +112,32 @@ class SimulationCore:
             "event_type": event_type,
             "message": message,
         })
+
+    def _complete_trip(self, car):
+        """Record a completed car trip (park or exit)."""
+        start = getattr(car, 'trip_start_time', None)
+        if start is None:
+            return
+        duration = self.time - start
+        if duration < 0:
+            return
+        self.sum_trip_durations += duration
+        self.total_completed_trips += 1
+        if duration > self.max_trip_duration:
+            self.max_trip_duration = duration
+        if self.min_trip_duration is None or duration < self.min_trip_duration:
+            self.min_trip_duration = duration
+
+    def _timed_plan(self, car, *args, **kwargs) -> bool:
+        """Call planner and record wall-clock time."""
+        t0 = time.perf_counter()
+        ok = self.planner.plan_for_car(car, *args, **kwargs)
+        elapsed_ms = (time.perf_counter() - t0) * 1000.0
+        self.planner_call_count += 1
+        self.sum_planner_ms += elapsed_ms
+        if elapsed_ms > self.max_planner_ms:
+            self.max_planner_ms = elapsed_ms
+        return ok
 
     # -------------------------------------------------
     # Runtime helpers
@@ -143,6 +179,7 @@ class SimulationCore:
         del self.parked_cars[car.car_id]
         car.intent = "EXIT"
         car.exit_start_time = self.time
+        car.trip_start_time = self.time
         self.active_cars[car.car_id] = car
         self._emit_event(car.car_id, "intent_park_to_exit", f"Car {car.car_id} has changed its intent from parking to exiting")
 
@@ -153,7 +190,7 @@ class SimulationCore:
             return
 
         obstacles = self._get_unplanned_obstacles(exclude_car_id=car.car_id)
-        ok = self.planner.plan_for_car(car, self.time, obstacles=obstacles)
+        ok = self._timed_plan(car, self.time, obstacles=obstacles)
         if not ok:
             self.total_failed_plans += 1
             car.plan_fail_count += 1
@@ -185,6 +222,7 @@ class SimulationCore:
         self.car_positions[car.car_id] = car.current_position
         self.all_cars[car.car_id] = car
         self.total_arrived += 1
+        car.trip_start_time = getattr(car, 'spawn_time', self.time)
         self._emit_event(car.car_id, "entered_lot", f"Car {car.car_id} has entered the lot")
 
         # Note: We assign goal based on CURRENT time state, but plan for FUTURE start
@@ -199,7 +237,7 @@ class SimulationCore:
 
         obstacles = self._get_unplanned_obstacles(exclude_car_id=car.car_id)
         
-        ok = self.planner.plan_for_car(car, start_time, obstacles=obstacles)
+        ok = self._timed_plan(car, start_time, obstacles=obstacles)
         if ok:
              self.total_planned += 1
              car.plan_fail_count = 0
@@ -256,9 +294,9 @@ class SimulationCore:
             # Randomized persistence to break symmetry in deadlocks
             persistence = random.randint(10, 30)
             
-            ok = self.planner.plan_for_car(
-                car, 
-                self.time, 
+            ok = self._timed_plan(
+                car,
+                self.time,
                 obstacles=obstacles,
                 obstacle_persistence=persistence
             )
@@ -403,6 +441,7 @@ class SimulationCore:
                     if car.intent == "PARK":
                         self.total_parked += 1
                         self.arriving_cars_parked_count += 1
+                        self._complete_trip(car)
                         self.sum_steps_to_park += (self.time - car.spawn_time)
 
                         self.parking_manager.mark_occupied(car, final_pos)
@@ -416,6 +455,7 @@ class SimulationCore:
                         self.parked_cars[car_id] = car
                     elif car.intent == "EXIT":
                          self.total_exited += 1
+                         self._complete_trip(car)
                          self.total_exit_journeys += 1
                          self.sum_steps_to_exit += self.time - getattr(car, 'exit_start_time', self.time)
 
@@ -470,6 +510,7 @@ class SimulationCore:
                              if car.intent == "PARK":
                                  self.total_parked += 1
                                  self.arriving_cars_parked_count += 1
+                                 self._complete_trip(car)
                                  self.sum_steps_to_park += (self.time - car.spawn_time)
                                  self.parking_manager.mark_occupied(car, curr_pos)
                                  if completed_path:
@@ -482,6 +523,7 @@ class SimulationCore:
                                  self.parked_cars[car_id] = car
                              elif car.intent == "EXIT":
                                  self.total_exited += 1
+                                 self._complete_trip(car)
                                  self.total_exit_journeys += 1
                                  self.sum_steps_to_exit += self.time - getattr(car, 'exit_start_time', self.time)
                                  self.exited_car_ids.add(car_id)

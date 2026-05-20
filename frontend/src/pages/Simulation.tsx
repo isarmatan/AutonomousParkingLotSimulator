@@ -55,6 +55,13 @@ type TimestepStats = {
   arriving_cars_parked: number;
   average_steps_to_park?: number;
   average_steps_to_exit?: number;
+  avg_trip_duration?: number;
+  max_trip_duration?: number;
+  min_trip_duration?: number;
+  avg_planner_ms?: number;
+  max_planner_ms?: number;
+  cpu_percent?: number;
+  memory_mb?: number;
 };
 
 type Timestep = {
@@ -115,6 +122,10 @@ export default function Simulation() {
   const [liveTimesteps, setLiveTimesteps] = useState<Timestep[]>([]);
   const [renderTick, setRenderTick] = useState(0);
   const [logEvents, setLogEvents]   = useState<LogEvent[]>([]);
+  const [sessionId, setSessionId]   = useState<string | null>(null);
+  const [saveModalOpen, setSaveModalOpen] = useState(false);
+  const [saveName, setSaveName]     = useState("");
+  const [saving, setSaving]         = useState(false);
 
   // ---- Refs ----
   const wsRef           = useRef<WebSocket | null>(null);
@@ -180,6 +191,7 @@ export default function Simulation() {
         }
 
         const { session_id, grid } = await res.json();
+        setSessionId(session_id);
         setGridData(grid);
 
         const ws = new WebSocket(`${WS_URL}/simulation/ws/${session_id}`);
@@ -196,6 +208,7 @@ export default function Simulation() {
             setLiveT(0);
             setLiveStats(null);
             setLogEvents([]);
+            setSaveModalOpen(false);
             userScrolledRef.current = false;
             setLoading(false);
             setWsStatus("RUNNING");
@@ -275,6 +288,27 @@ export default function Simulation() {
   };
 
   const isConnected = wsStatus === "RUNNING" || wsStatus === "PAUSED";
+
+  const canSave = (wsStatus === "PAUSED" || wsStatus === "COMPLETED") && sessionId !== null;
+
+  const handleSave = async () => {
+    if (!sessionId) return;
+    setSaving(true);
+    try {
+      const res = await fetch(`${API_URL}/simulation/${sessionId}/snapshot`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: saveName.trim() || "Untitled" }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      setSaveModalOpen(false);
+      setSaveName("");
+    } catch (e: unknown) {
+      alert(`Save failed: ${e instanceof Error ? e.message : e}`);
+    } finally {
+      setSaving(false);
+    }
+  };
 
   // ---- Canvas size ----
   const canvasSize = useMemo(() => {
@@ -485,10 +519,12 @@ export default function Simulation() {
               </>
             )}
 
-            <button
-              className="btnGhost"
-              onClick={() => { wsRef.current?.close(); nav("/layout"); }}
-            >
+            {canSave && (
+              <button className="btnSave" onClick={() => { setSaveName(""); setSaveModalOpen(true); }}>
+                Save Run
+              </button>
+            )}
+            <button className="btnGhost" onClick={() => { wsRef.current?.close(); nav("/layout"); }}>
               Close
             </button>
           </div>
@@ -565,6 +601,57 @@ export default function Simulation() {
                     <span className="statValue">{liveStats?.total_failed_plans ?? 0}</span>
                   </div>
                 </div>
+
+                <div className="statDivider" />
+
+                <div className="statGroup">
+                  <div className="statGroupTitle">Performance</div>
+                  <div className="statRow">
+                    <span className="statLabel">Avg Trip</span>
+                    <span className="statValue">
+                      {liveStats?.avg_trip_duration != null ? `${liveStats.avg_trip_duration.toFixed(1)} steps` : "—"}
+                    </span>
+                  </div>
+                  {liveStats?.max_trip_duration != null && (
+                    <div className="statRow">
+                      <span className="statLabel">Longest</span>
+                      <span className="statValue">{liveStats.max_trip_duration}</span>
+                    </div>
+                  )}
+                  {liveStats?.min_trip_duration != null && (
+                    <div className="statRow">
+                      <span className="statLabel">Shortest</span>
+                      <span className="statValue">{liveStats.min_trip_duration}</span>
+                    </div>
+                  )}
+                  {liveStats?.avg_planner_ms != null && (
+                    <div className="statRow">
+                      <span className="statLabel">Planner avg</span>
+                      <span className="statValue">{liveStats.avg_planner_ms.toFixed(1)} ms</span>
+                    </div>
+                  )}
+                </div>
+
+                {(liveStats?.cpu_percent != null || liveStats?.memory_mb != null) && (
+                  <>
+                    <div className="statDivider" />
+                    <div className="statGroup">
+                      <div className="statGroupTitle">System</div>
+                      {liveStats?.cpu_percent != null && (
+                        <div className="statRow">
+                          <span className="statLabel">CPU</span>
+                          <span className="statValue">{liveStats.cpu_percent}%</span>
+                        </div>
+                      )}
+                      {liveStats?.memory_mb != null && (
+                        <div className="statRow">
+                          <span className="statLabel">RAM</span>
+                          <span className="statValue">{liveStats.memory_mb} MB</span>
+                        </div>
+                      )}
+                    </div>
+                  </>
+                )}
               </div>
 
               {/* Viewport */}
@@ -643,6 +730,31 @@ export default function Simulation() {
           )}
         </div>
       </div>
+      {saveModalOpen && (
+        <div className="modalOverlay" onClick={() => setSaveModalOpen(false)}>
+          <div className="modalContent" onClick={e => e.stopPropagation()}>
+            <div className="modalHeader">
+              <h3>Save Run Snapshot</h3>
+            </div>
+            <p>Enter a name for this simulation snapshot.</p>
+            <input
+              className="saveNameInput"
+              type="text"
+              placeholder="e.g. Priority test run 1"
+              value={saveName}
+              onChange={e => setSaveName(e.target.value)}
+              onKeyDown={e => { if (e.key === "Enter") handleSave(); }}
+              autoFocus
+            />
+            <div className="modalActions">
+              <button className="btnGhost" onClick={() => setSaveModalOpen(false)}>Cancel</button>
+              <button className="btnPrimary" onClick={handleSave} disabled={saving}>
+                {saving ? "Saving…" : "Save"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </AppLayout>
   );
 }

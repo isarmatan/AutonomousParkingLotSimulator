@@ -351,6 +351,19 @@
   box-shadow: 0 0 0 4px rgba(253,230,138,.22);
 }
 
+.algoBadge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 6px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  background: rgba(129, 140, 248, 0.18);
+  color: rgba(199, 210, 254, 0.95);
+  border: 1px solid rgba(129, 140, 248, 0.3);
+}
+
 /* ===== Metrics ===== */
 .statMetric {
   display: flex;

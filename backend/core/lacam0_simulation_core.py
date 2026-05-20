@@ -1,5 +1,6 @@
 # core/lacam0_simulation_core.py
 import random
+import time
 from typing import Dict, Optional, Set, Tuple
 
 from core.simulation_core import SimulationConfig
@@ -65,6 +66,15 @@ class LaCAM0SimulationCore:
 
         self.pending_events: list = []
 
+        self.sum_trip_durations: int = 0
+        self.total_completed_trips: int = 0
+        self.max_trip_duration: int = 0
+        self.min_trip_duration = None
+
+        self.planner_call_count: int = 0
+        self.sum_planner_ms: float = 0.0
+        self.max_planner_ms: float = 0.0
+
         self._initialize_cars()
 
     # ------------------------------------------------------------------
@@ -100,6 +110,21 @@ class LaCAM0SimulationCore:
             "event_type": event_type,
             "message": message,
         })
+
+    def _complete_trip(self, car):
+        """Record a completed car trip (park or exit)."""
+        start = getattr(car, 'trip_start_time', None)
+        if start is None:
+            return
+        duration = self.time - start
+        if duration < 0:
+            return
+        self.sum_trip_durations += duration
+        self.total_completed_trips += 1
+        if duration > self.max_trip_duration:
+            self.max_trip_duration = duration
+        if self.min_trip_duration is None or duration < self.min_trip_duration:
+            self.min_trip_duration = duration
 
     # ------------------------------------------------------------------
     # Step
@@ -142,6 +167,7 @@ class LaCAM0SimulationCore:
         del self.parked_cars[car.car_id]
         car.intent = "EXIT"
         car.exit_start_time = self.time
+        car.trip_start_time = self.time
         self.active_cars[car.car_id] = car
         self._emit_event(car.car_id, "intent_park_to_exit", f"Car {car.car_id} has changed its intent from parking to exiting")
 
@@ -183,6 +209,7 @@ class LaCAM0SimulationCore:
         self.car_positions[car.car_id] = car.current_position
         self.all_cars[car.car_id] = car
         self.total_arrived += 1
+        car.trip_start_time = getattr(car, 'spawn_time', self.time)
         self._emit_event(car.car_id, "entered_lot", f"Car {car.car_id} has entered the lot")
 
         goal = self.parking_manager.assign_goal(car, self.time)
@@ -224,10 +251,16 @@ class LaCAM0SimulationCore:
 
         parked_cells = {car.current_position for car in self.parked_cars.values()}
 
+        _t0 = time.perf_counter()
         paths = self.batch_planner.plan(
             plannable, self.grid, parked_cells, self.time,
             ghost_exit_manager=self.ghost_exit_manager,
         )
+        _elapsed_ms = (time.perf_counter() - _t0) * 1000.0
+        self.planner_call_count += 1
+        self.sum_planner_ms += _elapsed_ms
+        if _elapsed_ms > self.max_planner_ms:
+            self.max_planner_ms = _elapsed_ms
 
         if paths is not None:
             for car_id, path in paths.items():
@@ -245,6 +278,7 @@ class LaCAM0SimulationCore:
     def _handle_car_exit(self, car_id: int, car) -> None:
         """Remove an exiting car and release its ghost goal (if any)."""
         self.total_exited += 1
+        self._complete_trip(car)
         self.total_exit_journeys += 1
         self.sum_steps_to_exit += self.time - getattr(car, "exit_start_time", self.time)
         self.exited_car_ids.add(car_id)
@@ -283,6 +317,7 @@ class LaCAM0SimulationCore:
                 if car.intent == "PARK":
                     self.total_parked += 1
                     self.arriving_cars_parked_count += 1
+                    self._complete_trip(car)
                     self.sum_steps_to_park += self.time - car.spawn_time
                     self.parking_manager.mark_occupied(car, next_pos)
                     car.clear_path()

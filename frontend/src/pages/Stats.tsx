@@ -29,6 +29,19 @@ type SimHistoryItem = {
 
   average_steps_to_park?: number;
   average_steps_to_exit?: number;
+
+  algorithm?: string;
+  avg_trip_duration_steps?: number;
+  max_trip_duration_steps?: number;
+  min_trip_duration_steps?: number;
+  total_completed_trips?: number;
+  avg_planner_ms?: number;
+  max_planner_ms?: number;
+  planner_call_count?: number;
+  cpu_usage_avg_percent?: number;
+  cpu_usage_peak_percent?: number;
+  memory_usage_avg_mb?: number;
+  memory_usage_peak_mb?: number;
 };
 
 export default function Stats() {
@@ -73,43 +86,29 @@ export default function Stats() {
     try {
       // Create CSV content from simulation data
       const csvHeaders = [
-        'Simulation ID',
-        'Name',
-        'Created At',
-        'Status',
-        'Grid Width',
-        'Grid Height',
-        'Initial Active Cars Configured',
-        'Max Arriving Cars Configured',
-        'Total Steps',
-        'Total Cars',
-        'Total Parked',
-        'Total Failed Plans',
-        'Initial Active Cars Exited',
-        'Arriving Cars Spawned',
-        'Arriving Cars Parked',
-        'Average Steps to Park',
-        'Average Steps to Exit'
+        'Simulation ID','Name','Created At','Status','Algorithm',
+        'Grid Width','Grid Height',
+        'Initial Active Cars Configured','Max Arriving Cars Configured',
+        'Total Steps','Total Cars','Total Parked','Total Failed Plans',
+        'Initial Active Cars Exited','Arriving Cars Spawned','Arriving Cars Parked',
+        'Average Steps to Park','Average Steps to Exit',
+        'Avg Trip Duration (steps)','Max Trip Duration','Min Trip Duration','Completed Trips',
+        'Avg Planner ms','Max Planner ms','Planner Calls',
+        'CPU Avg %','CPU Peak %','Memory Avg MB','Memory Peak MB'
       ];
 
       const csvData = [
-        item.id,
-        item.name || 'Untitled',
-        item.created_at,
-        item.status,
-        item.grid_width || '',
-        item.grid_height || '',
-        item.initial_active_cars_configured,
-        item.max_arriving_cars_configured,
-        item.total_steps,
-        item.total_cars,
-        item.total_parked,
-        item.total_failed_plans,
-        item.initial_active_cars_exited,
-        item.arriving_cars_spawned || '',
-        item.arriving_cars_parked,
-        item.average_steps_to_park || '',
-        item.average_steps_to_exit || ''
+        item.id,item.name||'Untitled',item.created_at,item.status,item.algorithm||'',
+        item.grid_width||'',item.grid_height||'',
+        item.initial_active_cars_configured,item.max_arriving_cars_configured,
+        item.total_steps,item.total_cars,item.total_parked,item.total_failed_plans,
+        item.initial_active_cars_exited,item.arriving_cars_spawned||'',item.arriving_cars_parked,
+        item.average_steps_to_park??'',item.average_steps_to_exit??'',
+        item.avg_trip_duration_steps??'',item.max_trip_duration_steps??'',
+        item.min_trip_duration_steps??'',item.total_completed_trips??'',
+        item.avg_planner_ms??'',item.max_planner_ms??'',item.planner_call_count??'',
+        item.cpu_usage_avg_percent??'',item.cpu_usage_peak_percent??'',
+        item.memory_usage_avg_mb??'',item.memory_usage_peak_mb??''
       ];
 
       // Convert to CSV format
@@ -204,44 +203,30 @@ export default function Stats() {
     
     // Create CSV content for multiple simulations
     const csvHeaders = [
-      'Simulation ID',
-      'Name',
-      'Created At',
-      'Status',
-      'Grid Width',
-      'Grid Height',
-      'Initial Active Cars Configured',
-      'Max Arriving Cars Configured',
-      'Total Steps',
-      'Total Cars',
-      'Total Parked',
-      'Total Failed Plans',
-      'Initial Active Cars Exited',
-      'Arriving Cars Spawned',
-      'Arriving Cars Parked',
-      'Average Steps to Park',
-      'Average Steps to Exit'
+      'Simulation ID','Name','Created At','Status','Algorithm',
+      'Grid Width','Grid Height',
+      'Initial Active Cars Configured','Max Arriving Cars Configured',
+      'Total Steps','Total Cars','Total Parked','Total Failed Plans',
+      'Initial Active Cars Exited','Arriving Cars Spawned','Arriving Cars Parked',
+      'Average Steps to Park','Average Steps to Exit',
+      'Avg Trip Duration (steps)','Max Trip Duration','Min Trip Duration','Completed Trips',
+      'Avg Planner ms','Max Planner ms','Planner Calls',
+      'CPU Avg %','CPU Peak %','Memory Avg MB','Memory Peak MB'
     ];
 
     const csvRows = selectedData.map(item => {
       const csvData = [
-        item.id,
-        item.name || 'Untitled',
-        item.created_at,
-        item.status,
-        item.grid_width || '',
-        item.grid_height || '',
-        item.initial_active_cars_configured,
-        item.max_arriving_cars_configured,
-        item.total_steps,
-        item.total_cars,
-        item.total_parked,
-        item.total_failed_plans,
-        item.initial_active_cars_exited,
-        item.arriving_cars_spawned || '',
-        item.arriving_cars_parked,
-        item.average_steps_to_park || '',
-        item.average_steps_to_exit || ''
+        item.id,item.name||'Untitled',item.created_at,item.status,item.algorithm||'',
+        item.grid_width||'',item.grid_height||'',
+        item.initial_active_cars_configured,item.max_arriving_cars_configured,
+        item.total_steps,item.total_cars,item.total_parked,item.total_failed_plans,
+        item.initial_active_cars_exited,item.arriving_cars_spawned||'',item.arriving_cars_parked,
+        item.average_steps_to_park??'',item.average_steps_to_exit??'',
+        item.avg_trip_duration_steps??'',item.max_trip_duration_steps??'',
+        item.min_trip_duration_steps??'',item.total_completed_trips??'',
+        item.avg_planner_ms??'',item.max_planner_ms??'',item.planner_call_count??'',
+        item.cpu_usage_avg_percent??'',item.cpu_usage_peak_percent??'',
+        item.memory_usage_avg_mb??'',item.memory_usage_peak_mb??''
       ];
       return csvData.map(field => `"${field}"`).join(',');
     });
@@ -274,10 +259,13 @@ export default function Stats() {
     const avgPark = avg(
       items.map((x) => x.average_steps_to_park).filter((v): v is number => typeof v === "number")
     );
+    const avgTripDuration = avg(
+      items.map((x) => x.avg_trip_duration_steps).filter((v): v is number => typeof v === "number")
+    );
 
     const totalFailures = items.reduce((sum, x) => sum + (x.total_failed_plans || 0), 0);
 
-    return { totalRuns, successRate, avgExit, avgPark, totalFailures };
+    return { totalRuns, successRate, avgExit, avgPark, totalFailures, avgTripDuration };
   }, [items]);
 
   return (
@@ -340,6 +328,12 @@ export default function Stats() {
               <div className="kpiValue">{kpis.totalFailures}</div>
               <div className="kpiSub">Total failed plans</div>
             </div>
+
+            <div className="kpiCard accentTurq">
+              <div className="kpiLabel">Avg Trip Duration</div>
+              <div className="kpiValue">{Number.isFinite(kpis.avgTripDuration) ? kpis.avgTripDuration.toFixed(1) : "—"}</div>
+              <div className="kpiSub">Steps per completed trip</div>
+            </div>
           </section>
         )}
 
@@ -367,10 +361,12 @@ export default function Stats() {
                   <th>Date</th>
                   <th>Name</th>
                   <th>Status</th>
+                  <th>Algorithm</th>
                   <th>Layout</th>
                   <th>Initial Batch</th>
                   <th>Arrivals</th>
                   <th>Efficiency (Avg Steps)</th>
+                  <th>Trip Duration</th>
                   <th>Total Steps</th>
                   <th>Export</th>
                   <th>Actions</th>
@@ -410,6 +406,10 @@ export default function Stats() {
                     </td>
 
                     <td>
+                      <span className="algoBadge">{item.algorithm ?? "—"}</span>
+                    </td>
+
+                    <td>
                       {item.grid_width && item.grid_height ? `${item.grid_width}x${item.grid_height}` : "Unknown"}
                     </td>
 
@@ -443,6 +443,19 @@ export default function Stats() {
                             ? `Park: ${item.average_steps_to_park.toFixed(1)}`
                             : "Park: —"}
                         </span>
+                      </div>
+                    </td>
+
+                    <td>
+                      <div className="statMetric">
+                        <span className="statMetricVal">
+                          {typeof item.avg_trip_duration_steps === "number"
+                            ? `${item.avg_trip_duration_steps.toFixed(1)} avg`
+                            : "—"}
+                        </span>
+                        {item.total_completed_trips != null && (
+                          <span className="statMetricSub">{item.total_completed_trips} trips</span>
+                        )}
                       </div>
                     </td>
 

@@ -1,0 +1,278 @@
+Context:
+I would like you to create a strategy/design for improving the tracked statistics in my Autonomous Parking Lot Simulator.
+
+Important:
+Do NOT implement anything yet.
+First, scan the project, understand the current statistics flow, and propose a clean strategy.
+Wait for my approval before making any code changes.
+
+Current situation:
+The system already tracks and displays these statistics:
+
+Exit:
+- # Exited
+- Avg Steps
+
+Arrivals:
+- # Spawned
+- # Parked
+- Avg Steps
+
+Global:
+- Time (steps)
+- Failures
+
+New statistics I want to track as well, if feasible:
+- Average total trip duration
+- Longest trip duration
+- Shortest trip duration
+- Average planner runtime
+- CPU usage
+- Memory usage
+
+Important requirements:
+1. These changes must apply to BOTH planner options:
+   - LaCAM0 option
+   - Priority Planner option
+
+2. I want an option to save a statistic snapshot/result:
+   - After the user hits the pause button.
+   - Or allow save if the simulation ends because a maximum timestep was configure (no pausing required)
+
+3. I already have a Statistics page.
+   - This page needs to be adjusted so it can display the saved statistics.
+   - Please inspect the current statistics page before proposing changes.
+
+4. Please also inspect and consider:
+   - parking_lots.db
+   - Current database schema
+   - Existing saved parking lot / simulation data structure
+   - Whether statistics should be saved in the existing database or in a new table
+
+What I need you to do first:
+Please scan the project and identify:
+- Where current statistics are calculated.
+- Where current statistics are stored in memory.
+- How statistics are sent from backend to frontend.
+- How the 2D/3D simulation receives and displays statistics.
+- How pause is currently implemented.
+- How max timestep / simulation end is currently implemented.
+- How LaCAM0 and Priority Planner are selected and executed.
+- Whether both planner options currently expose enough data for these new statistics.
+- How parking_lots.db is structured and whether it is currently used for storing statistics.
+
+Please create a strategy document that covers:
+
+1. Current statistics architecture
+Explain the current flow:
+- Backend calculation
+- Simulation core / planner involvement
+- API response structure
+- Frontend display
+- Statistics page
+- Database usage
+
+2. Feasibility of each requested statistic
+For each new statistic, explain:
+- Whether it is feasible.
+- Where it should be measured.
+- Any risks or limitations.
+- Whether it works for both LaCAM0 and Priority Planner.
+
+Requested statistics:
+
+A. Average total trip duration
+Definition suggestion:
+The average number of simulation steps between a car entering/spawning and completing its goal, either parked or exited.
+Please confirm if this definition fits the current system.
+
+B. Longest trip duration
+Definition suggestion:
+The maximum completed trip duration among all completed cars.
+
+C. Shortest trip duration
+Definition suggestion:
+The minimum completed trip duration among all completed cars.
+
+D. Average planner runtime
+Definition suggestion:
+Average time spent by the selected planner per planning/replanning call.
+This should support:
+- LaCAM0 planner runtime
+- Priority Planner runtime
+Please consider storing:
+- Average runtime
+- Last runtime
+- Max runtime
+- Number of planner calls
+
+E. CPU usage
+Please think carefully about feasibility.
+I want CPU usage if it can be measured safely without making the simulation unstable or complicated.
+Please include:
+- How CPU usage would be measured.
+- Whether it should be process-level CPU usage or system-level CPU usage.
+- Whether it requires a dependency such as psutil.
+- Whether it should be sampled periodically instead of calculated every step.
+- How to avoid performance overhead.
+Also include computer specification details if feasible, such as:
+- CPU model
+- Number of physical/logical cores
+- RAM amount
+- Operating system
+- Python version
+
+F. Memory usage
+Please include:
+- Process memory usage if feasible.
+- System memory usage if useful.
+- Whether peak memory should be tracked.
+- Whether it should be sampled periodically to avoid overhead.
+
+3. Planner compatibility strategy
+Because the project supports both LaCAM0 and Priority Planner, propose a shared statistics interface or abstraction.
+Please consider:
+- Measuring runtime in a wrapper around planner calls instead of inside each planner.
+- Making sure LaCAM0 external executable/runtime is measured correctly.
+- Making sure Priority Planner runtime is measured correctly.
+- Making sure both planners produce comparable statistics.
+
+4. Trip tracking strategy
+Please propose how to track trip duration per car.
+Think about:
+- When a car's trip starts.
+- When a car's trip ends.
+- Whether entering cars and exiting cars should be counted separately or together.
+- Whether parked cars count as completed trips.
+- Whether exited cars count as completed trips.
+- How to handle cars that are still active when the user pauses.
+- How to handle cars that fail or get removed unexpectedly.
+
+5. Save statistics strategy
+I want the user to be able to save statistics:
+- When the pause button is clicked.
+- When the simulation ends due to max timestep.
+Please propose:
+- Where the save action should be triggered.
+- Whether saving should be manual, automatic, or both.
+- What should be included in the saved snapshot.
+- Whether the user should be asked for a name/label for the saved run.
+- How to avoid duplicate saves.
+- Whether saving should happen from frontend to backend through a new API endpoint.
+- How to handle simulations that were never started or have no meaningful data.
+
+6. Database strategy
+Please inspect parking_lots.db and propose the safest database change.
+Possible options:
+- Add a new simulation_statistics table.
+- Store statistics as JSON in an existing table.
+- Create a relation between a saved parking lot and saved statistics.
+- Store algorithm name, layout ID, timestamp, config, and metrics.
+Please include a recommended schema, but do NOT implement it yet.
+
+Example fields to consider:
+- id
+- parking_lot_id
+- simulation_name / run_name
+- algorithm
+- created_at
+- total_steps
+- max_timestep_configured
+- spawned_count
+- parked_count
+- exited_count
+- failures
+- avg_arrival_steps
+- avg_exit_steps
+- avg_total_trip_duration
+- longest_trip_duration
+- shortest_trip_duration
+- avg_planner_runtime_ms
+- max_planner_runtime_ms
+- planner_call_count
+- cpu_usage_avg
+- cpu_usage_peak
+- memory_usage_avg_mb
+- memory_usage_peak_mb
+- machine_specs_json
+- config_json
+- raw_stats_json
+
+
+8. Frontend simulation UI adjustment strategy
+Please inspect where the current live statistics are shown.
+Propose how to add the new metrics without cluttering the UI:
+- Average total trip duration
+- Longest trip duration
+- Shortest trip duration
+- Average planner runtime
+- CPU usage
+- Memory usage
+Please decide whether CPU/memory should be shown live, only in saved statistics, or both.
+
+9. Performance and safety
+Please make sure the strategy does not significantly hurt simulation performance.
+Consider:
+- Sampling CPU/memory every N steps instead of every step.
+- Avoiding heavy database writes during each timestep.
+- Saving only on pause/end, not constantly.
+- Keeping statistics aggregation incremental.
+- Avoiding full history scans every frame.
+- Avoiding excessive frontend re-renders.
+
+10. Edge cases
+Please include how the strategy handles:
+- Simulation paused multiple times.
+- User saves the same paused state multiple times.
+- Simulation reset.
+- Simulation ends naturally.
+- Simulation has no cars completed yet.
+- Planner fails.
+- LaCAM0 timeout or external process failure.
+- Priority Planner failure.
+- Old saved simulations/statistics that do not include the new fields.
+- parking_lots.db already existing on user machines.
+
+11. Recommended implementation plan
+Please provide a phased implementation plan, but do not code yet.
+Suggested phases:
+Phase 1:
+- Understand current stats flow and DB.
+- Define shared statistics model.
+
+Phase 2:
+- Add trip duration and planner runtime tracking for both planners.
+
+Phase 3:
+- Add safe CPU/memory/machine specs collection.
+
+Phase 4:
+- Add save-statistics backend API and DB storage.
+
+Phase 5:
+- Adjust frontend live stats display.
+
+Phase 6:
+- Adjust Statistics page to display saved runs.
+
+Phase 7:
+- Testing and validation.
+
+12. Testing strategy
+Please propose tests for:
+- Priority Planner statistics correctness.
+- LaCAM0 statistics correctness.
+- Pause-save behavior.
+- Max timestep auto-save behavior.
+- Database persistence.
+- Statistics page display.
+- Missing/legacy stats.
+- CPU/memory availability on different operating systems.
+
+Main requirement:
+Do not implement anything yet.
+Only produce the strategy/design for review.
+Wait for my approval before implementation.
+
+Preferred outcome:
+A safe, minimal, maintainable strategy that extends statistics tracking for both LaCAM0 and Priority Planner, allows saving simulation statistics on pause/end, and updates the Statistics page using parking_lots.db without risky changes to the existing simulation logic.

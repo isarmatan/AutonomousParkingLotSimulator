@@ -47,6 +47,19 @@ class TimestepStatsDTO(BaseModel):
     average_steps_to_park: Optional[float] = None
     average_steps_to_exit: Optional[float] = None
 
+    # Trip duration
+    avg_trip_duration: Optional[float] = None
+    max_trip_duration: Optional[int] = None
+    min_trip_duration: Optional[int] = None
+
+    # Planner runtime
+    avg_planner_ms: Optional[float] = None
+    max_planner_ms: Optional[float] = None
+
+    # System resources
+    cpu_percent: Optional[float] = None
+    memory_mb: Optional[float] = None
+
 class TimestepDTO(BaseModel):
     t: int
     # cars: car_id -> [x, y]
@@ -96,6 +109,23 @@ class SimulationHistoryItemDTO(BaseModel):
 
     average_steps_to_park: Optional[float]
     average_steps_to_exit: Optional[float]
+
+    algorithm: Optional[str] = None
+    avg_trip_duration_steps: Optional[float] = None
+    max_trip_duration_steps: Optional[int] = None
+    min_trip_duration_steps: Optional[int] = None
+    total_completed_trips: Optional[int] = None
+    avg_planner_ms: Optional[float] = None
+    max_planner_ms: Optional[float] = None
+    planner_call_count: Optional[int] = None
+    cpu_usage_avg_percent: Optional[float] = None
+    cpu_usage_peak_percent: Optional[float] = None
+    memory_usage_avg_mb: Optional[float] = None
+    memory_usage_peak_mb: Optional[float] = None
+    machine_specs_json: Optional[str] = None
+
+class SnapshotRequest(BaseModel):
+    name: str = "Untitled"
 
 class SimulationSaveRequest(BaseModel):
     name: str

@@ -28,6 +28,7 @@ from .simulation_dtos import (
     SimulationMetaDTO,
     SimulationHistoryItemDTO,
     SimulationSaveRequest,
+    SnapshotRequest,
     LiveSimulationRequest,
     SessionInitResponse,
 )
@@ -190,16 +191,37 @@ def start_simulation(req: LiveSimulationRequest, db: Session = Depends(get_db)):
         )
 
     session_id = str(uuid.uuid4())
+    parking_lot_id = req.parkingLotId if req.source == "load" else None
     session = SimulationSession(
         session_id=session_id,
         simulation_factory=simulation_factory,
         grid_data=grid_to_json_dict(grid),
         max_timesteps=req.max_timesteps,
         step_delay_ms=req.step_delay_ms,
+        algorithm=req.algorithm,
+        config_snapshot=req.model_dump(),
+        parking_lot_id=parking_lot_id,
+        grid_width=grid.width,
+        grid_height=grid.height,
     )
     simulation_manager.add_session(session)
 
     return SessionInitResponse(session_id=session_id, grid=grid_to_json_dict(grid))
+
+
+@router.post("/{session_id}/snapshot", response_model=SimulationHistoryItemDTO)
+def save_session_snapshot(
+    session_id: str,
+    req: SnapshotRequest,
+    db: Session = Depends(get_db),
+):
+    """Save a snapshot of the current live simulation state to the DB."""
+    session = simulation_manager.get_session(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+    snap = session.build_snapshot(name=req.name)
+    repo = SimulationRepository(db)
+    return repo.save_snapshot(snap)
 
 
 @router.post("/run", response_model=SimulationResponse)

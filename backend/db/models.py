@@ -1,6 +1,7 @@
 import datetime as dt
+from typing import Optional
 
-from sqlalchemy import DateTime, String, Text
+from sqlalchemy import DateTime, Float, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .database import Base
@@ -53,6 +54,25 @@ class SimulationResultModel(Base):
     arriving_cars_spawned: Mapped[int] = mapped_column(nullable=False)
     arriving_cars_parked: Mapped[int] = mapped_column(nullable=False)
     
-    average_steps_to_park: Mapped[float] = mapped_column(nullable=True)
-    average_steps_to_exit: Mapped[float] = mapped_column(nullable=True)
+    average_steps_to_park: Mapped[Optional[float]] = mapped_column(nullable=True)
+    average_steps_to_exit: Mapped[Optional[float]] = mapped_column(nullable=True)
+
+    # Extended statistics (nullable — old records have NULL here)
+    algorithm: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    config_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    avg_trip_duration_steps: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    max_trip_duration_steps: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    min_trip_duration_steps: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    total_completed_trips: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+
+    avg_planner_ms: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    max_planner_ms: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    planner_call_count: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+
+    cpu_usage_avg_percent: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    cpu_usage_peak_percent: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    memory_usage_avg_mb: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    memory_usage_peak_mb: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    machine_specs_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 

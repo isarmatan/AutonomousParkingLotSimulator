@@ -43,6 +43,46 @@ class SimulationRepository:
         self._db.refresh(model)
         return model
 
+    def save_snapshot(self, data: dict) -> SimulationResultModel:
+        """Persist a live-simulation snapshot to DB."""
+        model = SimulationResultModel(
+            id=str(uuid.uuid4()),
+            name=data.get("name", "Untitled"),
+            parking_lot_id=data.get("parking_lot_id"),
+            grid_width=data.get("grid_width", 0),
+            grid_height=data.get("grid_height", 0),
+            initial_active_cars_configured=data.get("initial_cars", 0),
+            max_arriving_cars_configured=data.get("max_arriving_cars", 0),
+            total_steps=data.get("total_steps", 0),
+            total_cars=data.get("total_cars", 0),
+            total_parked=data.get("total_parked", 0),
+            total_failed_plans=data.get("total_failed_plans", 0),
+            status=data.get("status", "PAUSED"),
+            initial_active_cars_exited=data.get("total_exited", 0),
+            arriving_cars_spawned=data.get("arriving_cars_spawned", 0),
+            arriving_cars_parked=data.get("arriving_cars_parked", 0),
+            average_steps_to_park=data.get("average_steps_to_park"),
+            average_steps_to_exit=data.get("average_steps_to_exit"),
+            algorithm=data.get("algorithm"),
+            config_json=data.get("config_json"),
+            avg_trip_duration_steps=data.get("avg_trip_duration_steps"),
+            max_trip_duration_steps=data.get("max_trip_duration_steps"),
+            min_trip_duration_steps=data.get("min_trip_duration_steps"),
+            total_completed_trips=data.get("total_completed_trips"),
+            avg_planner_ms=data.get("avg_planner_ms"),
+            max_planner_ms=data.get("max_planner_ms"),
+            planner_call_count=data.get("planner_call_count"),
+            cpu_usage_avg_percent=data.get("cpu_usage_avg_percent"),
+            cpu_usage_peak_percent=data.get("cpu_usage_peak_percent"),
+            memory_usage_avg_mb=data.get("memory_usage_avg_mb"),
+            memory_usage_peak_mb=data.get("memory_usage_peak_mb"),
+            machine_specs_json=data.get("machine_specs_json"),
+        )
+        self._db.add(model)
+        self._db.commit()
+        self._db.refresh(model)
+        return model
+
     def list_history(self, limit: int = 50) -> List[SimulationResultModel]:
         stmt = select(SimulationResultModel).order_by(SimulationResultModel.created_at.desc()).limit(limit)
         return list(self._db.scalars(stmt))
