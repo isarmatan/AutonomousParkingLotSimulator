@@ -134,13 +134,27 @@ const STATUS_CLASS: Record<WsStatus, string> = {
   PAUSED: "warning", STOPPED: "warning", COMPLETED: "success", ERROR: "error",
 };
 
-const COLORS = {
-  CAR_INITIAL:       "#7c3aed",
-  CAR_INITIAL_GLOW:  "rgba(139,92,246,0.85)",
-  CAR_ARRIVING:      "#0ea5e9",
-  CAR_ARRIVING_GLOW: "rgba(56,189,248,0.85)",
-  CAR_TEXT: "#ffffff",
-};
+const CAR_PALETTE = [
+  "#f97316", // orange
+  "#eab308", // yellow
+  "#22c55e", // green
+  "#06b6d4", // cyan
+  "#8b5cf6", // violet
+  "#ec4899", // pink
+  "#ef4444", // red
+  "#14b8a6", // teal
+  "#a855f7", // purple
+  "#f59e0b", // amber
+  "#84cc16", // lime
+  "#38bdf8", // sky
+];
+const CAR_TEXT = "#ffffff";
+
+function carColor(id: string): string {
+  let h = 0;
+  for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) & 0xffff;
+  return CAR_PALETTE[h % CAR_PALETTE.length];
+}
 
 export default function Simulation() {
   const nav = useNavigate();
@@ -467,25 +481,17 @@ export default function Simulation() {
 
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    Object.entries(liveCarsRef.current).forEach(([id, [cx, cy, isInitial]]) => {
+    Object.entries(liveCarsRef.current).forEach(([id, [cx, cy]]) => {
       const px = PADDING_PX + cx * (CELL_PX + GAP_PX) + CELL_PX / 2;
       const py = PADDING_PX + cy * (CELL_PX + GAP_PX) + CELL_PX / 2;
       const carLen = CELL_PX * 0.75;
       const carW   = CELL_PX * 0.45;
 
-      const isInit = isInitial === 1;
-      const carFill = isInit ? COLORS.CAR_INITIAL  : COLORS.CAR_ARRIVING;
-      const carGlow = isInit ? COLORS.CAR_INITIAL_GLOW : COLORS.CAR_ARRIVING_GLOW;
-
       ctx.save();
       ctx.translate(px, py);
 
-      // glow halo
-      ctx.shadowColor = carGlow;
-      ctx.shadowBlur  = 10;
-
-      // car body
-      ctx.fillStyle = carFill;
+      // car body — per-ID color, no glow
+      ctx.fillStyle = carColor(id);
       ctx.beginPath();
       if (typeof ctx.roundRect === "function") {
         ctx.roundRect(-carLen / 2, -carW / 2, carLen, carW, 5);
@@ -494,23 +500,20 @@ export default function Simulation() {
       }
       ctx.fill();
 
-      // lit edge stroke
-      ctx.shadowBlur  = 0;
-      ctx.strokeStyle = "rgba(255,255,255,0.30)";
+      // subtle edge stroke
+      ctx.strokeStyle = "rgba(255,255,255,0.25)";
       ctx.lineWidth   = 1;
       ctx.stroke();
 
       ctx.restore();
 
-      // ID label (drawn outside save/restore so shadow doesn't bleed)
-      ctx.shadowColor = "rgba(0,0,0,0.9)";
-      ctx.shadowBlur  = 3;
-      ctx.fillStyle   = COLORS.CAR_TEXT;
+      // ID label
+      ctx.shadowBlur  = 0;
+      ctx.fillStyle   = CAR_TEXT;
       ctx.font        = "bold 9px sans-serif";
       ctx.textAlign   = "center";
       ctx.textBaseline = "middle";
       ctx.fillText(id.slice(0, 3), px, py);
-      ctx.shadowBlur  = 0;
     });
   }, [renderTick, viewMode, canvasSize, gridData]);
 
