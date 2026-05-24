@@ -154,7 +154,7 @@ export default function Simulation() {
   const [wsStatus, setWsStatus]     = useState<WsStatus>("IDLE");
   const [liveT, setLiveT]           = useState(0);
   const [liveStats, setLiveStats]   = useState<TimestepStats | null>(null);
-  const [viewMode, setViewMode]     = useState<"2D" | "3D">("3D");
+  const [viewMode, setViewMode]     = useState<"2D" | "3D">("2D");
   const [liveTimesteps, setLiveTimesteps] = useState<Timestep[]>([]);
   const [renderTick, setRenderTick] = useState(0);
   const [logEvents, setLogEvents]   = useState<LogEvent[]>([]);
@@ -167,6 +167,7 @@ export default function Simulation() {
   const [pendingHeadlessSave, setPendingHeadlessSave] = useState<HeadlessResult | null>(null);
   const [loadingMessage, setLoadingMessage] = useState("Connecting to simulation…");
   const [simAlgorithm, setSimAlgorithm] = useState<string | null>(null);
+  const [simInitialCars, setSimInitialCars] = useState(0);
 
   // ---- Refs ----
   const wsRef           = useRef<WebSocket | null>(null);
@@ -199,6 +200,7 @@ export default function Simulation() {
         if (!rawConfig) throw new Error("Missing simulation configuration.");
         const config: SimConfig = JSON.parse(rawConfig);
         setSimAlgorithm(config.algorithm);
+        setSimInitialCars(config.initial_cars);
 
         const basePayload: Partial<LiveSimulationRequest> = { ...config };
 
@@ -558,15 +560,17 @@ export default function Simulation() {
                 <LayoutGrid size={18} />
                 <span style={{ fontSize: "0.8rem", fontWeight: 600 }}>2D</span>
               </button>
-              <button
-                className={`iconBtn ${viewMode === "3D" ? "primary" : ""}`}
-                onClick={() => setViewMode("3D")}
-                title="3D View"
-                style={{ width: "auto", padding: "0 8px", gap: "6px" }}
-              >
-                <Box size={18} />
-                <span style={{ fontSize: "0.8rem", fontWeight: 600 }}>3D</span>
-              </button>
+              {simInitialCars <= 100 && (
+                <button
+                  className={`iconBtn ${viewMode === "3D" ? "primary" : ""}`}
+                  onClick={() => setViewMode("3D")}
+                  title="3D View"
+                  style={{ width: "auto", padding: "0 8px", gap: "6px" }}
+                >
+                  <Box size={18} />
+                  <span style={{ fontSize: "0.8rem", fontWeight: 600 }}>3D</span>
+                </button>
+              )}
             </div>
 
             {viewMode === "2D" && (
