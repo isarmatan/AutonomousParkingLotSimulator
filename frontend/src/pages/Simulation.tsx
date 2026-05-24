@@ -166,6 +166,7 @@ export default function Simulation() {
   const [comparisonResults, setComparisonResults] = useState<HeadlessResult[] | null>(null);
   const [pendingHeadlessSave, setPendingHeadlessSave] = useState<HeadlessResult | null>(null);
   const [loadingMessage, setLoadingMessage] = useState("Connecting to simulation…");
+  const [simAlgorithm, setSimAlgorithm] = useState<string | null>(null);
 
   // ---- Refs ----
   const wsRef           = useRef<WebSocket | null>(null);
@@ -197,6 +198,7 @@ export default function Simulation() {
         const rawConfig = sessionStorage.getItem(CONFIG_KEY);
         if (!rawConfig) throw new Error("Missing simulation configuration.");
         const config: SimConfig = JSON.parse(rawConfig);
+        setSimAlgorithm(config.algorithm);
 
         const basePayload: Partial<LiveSimulationRequest> = { ...config };
 
@@ -536,6 +538,9 @@ export default function Simulation() {
               <span className={`statusBadge ${STATUS_CLASS[wsStatus] ?? "default"}`}>
                 {statusLabel}
               </span>
+            )}
+            {simAlgorithm && wsStatus !== "IDLE" && (
+              <span className="simAlgoBadge">{simAlgorithm.toUpperCase()}</span>
             )}
           </div>
 

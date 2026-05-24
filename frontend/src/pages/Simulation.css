@@ -67,6 +67,18 @@
   border: 1px solid rgba(234, 179, 8, 0.4);
 }
 
+.simAlgoBadge {
+  padding: 0.25rem 0.75rem;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  background: rgba(129, 140, 248, 0.15);
+  color: #c7d2fe;
+  border: 1px solid rgba(129, 140, 248, 0.35);
+}
+
 .simControls {
   display: flex;
   align-items: center;
@@ -347,10 +359,14 @@
   min-width: 0;
   min-height: 0;
   overflow: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .simGridWrap {
   transform-origin: top left;
+  margin: auto;
   will-change: transform;
   width: max-content;
 }
