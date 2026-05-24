@@ -34,6 +34,8 @@ from .simulation_dtos import (
     HeadlessSimulationRequest,
     HeadlessResultDTO,
     HeadlessSaveRequest,
+    ComparisonRequest,
+    ComparisonResultDTO,
 )
 from .simulation_session import SimulationSession, _collect_machine_specs
 from . import simulation_manager
@@ -227,13 +229,8 @@ def save_session_snapshot(
     return repo.save_snapshot(snap)
 
 
-@router.post("/headless", response_model=HeadlessResultDTO)
-def run_headless_simulation(req: HeadlessSimulationRequest, db: Session = Depends(get_db)):
-    """Run a simulation without live rendering and return final statistics only."""
-    if req.max_steps <= 0:
-        raise HTTPException(status_code=422, detail="max_steps must be >= 1 for headless mode")
-
-    grid = _acquire_grid(req, db)
+def _build_and_run_headless(req: HeadlessSimulationRequest, grid: Grid) -> HeadlessResultDTO:
+    """Core headless run logic — shared by /headless and /compare."""
     parking_cells, exit_cells, entry_cells = _extract_cells(grid)
     total_spots = len(parking_cells)
 
@@ -276,17 +273,15 @@ def run_headless_simulation(req: HeadlessSimulationRequest, db: Session = Depend
         )
         simulation = SimulationCore(grid=grid, parking_manager=pm, planner=planner, config=cfg)
 
-    # psutil sampling setup
     try:
         import psutil as _ps
         _proc = _ps.Process()
-        _proc.cpu_percent(interval=None)  # prime the counter
+        _proc.cpu_percent(interval=None)
     except Exception:
         _proc = None
     cpu_sum = cpu_peak = mem_sum = mem_peak = 0.0
     sample_count = 0
 
-    # Main headless loop — no frame capture, no step delay
     completed = False
     try:
         for _ in range(req.max_steps):
@@ -349,6 +344,46 @@ def run_headless_simulation(req: HeadlessSimulationRequest, db: Session = Depend
         memory_usage_peak_mb=round(mem_peak, 1) if sample_count > 0 else None,
         machine_specs=_collect_machine_specs(),
     )
+
+
+@router.post("/headless", response_model=HeadlessResultDTO)
+def run_headless_simulation(req: HeadlessSimulationRequest, db: Session = Depends(get_db)):
+    """Run a simulation without live rendering and return final statistics only."""
+    if req.max_steps <= 0:
+        raise HTTPException(status_code=422, detail="max_steps must be >= 1 for headless mode")
+    grid = _acquire_grid(req, db)
+    return _build_and_run_headless(req, grid)
+
+
+@router.post("/compare", response_model=ComparisonResultDTO)
+def run_comparison(req: ComparisonRequest, db: Session = Depends(get_db)):
+    """Run two (or more) headless simulations on the same grid and return results for each."""
+    if req.max_steps <= 0:
+        raise HTTPException(status_code=422, detail="max_steps must be >= 1")
+    if len(req.algorithms) < 2:
+        raise HTTPException(status_code=422, detail="At least 2 algorithms required for comparison")
+
+    grid = _acquire_grid(req, db)
+    results = []
+    for algo in req.algorithms:
+        headless_req = HeadlessSimulationRequest(
+            source=req.source,
+            width=req.width,
+            height=req.height,
+            rules=req.rules,
+            parkingLotId=req.parkingLotId,
+            planning_horizon=req.planning_horizon,
+            goal_reserve_horizon=req.goal_reserve_horizon,
+            arrival_lambda=req.arrival_lambda,
+            exit_rate=req.exit_rate,
+            initial_cars=req.initial_cars,
+            max_arriving_cars=req.max_arriving_cars,
+            algorithm=algo,
+            max_steps=req.max_steps,
+        )
+        results.append(_build_and_run_headless(headless_req, grid))
+
+    return ComparisonResultDTO(results=results)
 
 
 @router.post("/headless/save", response_model=SimulationHistoryItemDTO)

@@ -210,7 +210,8 @@
 /* ===== Table container (Glass) ===== */
 .statsTableContainer {
   border-radius: 18px;
-  overflow: hidden;
+  overflow-x: auto;
+  overflow-y: visible;
 }
 
 .statsTableContainer.glass{

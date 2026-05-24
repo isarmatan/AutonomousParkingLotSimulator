@@ -235,3 +235,27 @@ class HeadlessSaveRequest(BaseModel):
     name: str = "Untitled"
     result: HeadlessResultDTO
     config_json: Optional[str] = None
+
+
+# --- Comparison Simulation DTOs ---
+
+class ComparisonRequest(BaseModel):
+    source: Literal["generate", "load"]
+    width: Optional[int] = None
+    height: Optional[int] = None
+    rules: Optional[SimulationRulesDTO] = None
+    parkingLotId: Optional[str] = None
+
+    planning_horizon: int = 50
+    goal_reserve_horizon: int = 200
+    arrival_lambda: float = 0.3
+    exit_rate: float = 0.02
+    initial_cars: int = 5
+    max_arriving_cars: int = 0
+    max_steps: int  # required
+
+    algorithms: List[str]  # exactly 2 (extensible for future 3rd algorithm)
+
+
+class ComparisonResultDTO(BaseModel):
+    results: List[HeadlessResultDTO]

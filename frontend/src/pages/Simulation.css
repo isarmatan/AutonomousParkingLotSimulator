@@ -714,3 +714,79 @@
   font-size: 0.72rem;
   color: #475569;
 }
+
+/* ===== Comparison Panel ===== */
+
+.comparisonPanel {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
+.comparisonHeader {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 24px 12px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.1);
+  flex-shrink: 0;
+}
+
+.comparisonTitle {
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: #e2e8f0;
+  letter-spacing: 0.04em;
+}
+
+.comparisonMeta {
+  font-size: 0.78rem;
+  color: #475569;
+}
+
+.comparisonSides {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  flex: 1;
+  overflow: hidden;
+}
+
+/* vertical divider between sides */
+.comparisonSides > .comparisonSide:not(:last-child) {
+  border-right: 1px solid rgba(148, 163, 184, 0.1);
+}
+
+.comparisonSide {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 20px 24px;
+  overflow-y: auto;
+}
+
+.comparisonSideHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-shrink: 0;
+}
+
+.comparisonSideBadges {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.comparisonSideSteps {
+  font-size: 0.8rem;
+  color: #475569;
+  font-variant-numeric: tabular-nums;
+}
+
+.comparisonSideSave {
+  align-self: flex-start;
+  margin-top: auto;
+  flex-shrink: 0;
+}

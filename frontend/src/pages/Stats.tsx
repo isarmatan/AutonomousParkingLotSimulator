@@ -263,9 +263,7 @@ export default function Stats() {
       items.map((x) => x.avg_trip_duration_steps).filter((v): v is number => typeof v === "number")
     );
 
-    const totalFailures = items.reduce((sum, x) => sum + (x.total_failed_plans || 0), 0);
-
-    return { totalRuns, successRate, avgExit, avgPark, totalFailures, avgTripDuration };
+    return { totalRuns, successRate, avgExit, avgPark, avgTripDuration };
   }, [items]);
 
   return (
@@ -321,12 +319,6 @@ export default function Stats() {
               <div className="kpiLabel">Avg Park Steps</div>
               <div className="kpiValue">{Number.isFinite(kpis.avgPark) ? kpis.avgPark.toFixed(1) : "—"}</div>
               <div className="kpiSub">Mean per run</div>
-            </div>
-
-            <div className="kpiCard accentAmber">
-              <div className="kpiLabel">Failures</div>
-              <div className="kpiValue">{kpis.totalFailures}</div>
-              <div className="kpiSub">Total failed plans</div>
             </div>
 
             <div className="kpiCard accentTurq">

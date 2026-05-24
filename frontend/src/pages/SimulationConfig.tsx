@@ -4,7 +4,7 @@ import AppLayout from "../layouts/AppLayout";
 import "./SimulationConfig.css";
 import bgHero from "../assets/HomePage.webp"; 
 
-import { Car, Activity, Clock, LogOut, LogIn, Hash, Cpu, Zap } from "lucide-react";
+import { Car, Activity, Clock, LogOut, LogIn, Hash, Cpu, Zap, GitCompare } from "lucide-react";
 
 type SimConfig = {
   planning_horizon: number;
@@ -16,7 +16,15 @@ type SimConfig = {
   step_delay_ms: number;
   algorithm: string;
   headless_mode: boolean;
+  comparison_mode: boolean;
+  comparison_algorithms: string[];
 };
+
+const ALL_ALGORITHMS: { value: string; label: string }[] = [
+  { value: "priority", label: "Priority Planner" },
+  { value: "lacam0",   label: "LaCAM0" },
+  // add future algorithms here
+];
 
 const STORAGE_KEY = "sim_config_v3";
 
@@ -32,6 +40,17 @@ export default function SimulationConfig() {
   const [stepDelayMs, setStepDelayMs] = useState<number>(100);
   const [algorithm, setAlgorithm] = useState<string>("priority");
   const [headlessMode, setHeadlessMode] = useState<boolean>(false);
+  const [comparisonMode, setComparisonMode] = useState<boolean>(false);
+  const [comparisonAlgorithms, setComparisonAlgorithms] = useState<string[]>(["priority", "lacam0"]);
+
+  const handleHeadlessChange = (v: boolean) => {
+    setHeadlessMode(v);
+    if (v) setComparisonMode(false);
+  };
+  const handleComparisonChange = (v: boolean) => {
+    setComparisonMode(v);
+    if (v) setHeadlessMode(false);
+  };
 
   const defaults = useMemo(
     () => ({
@@ -44,6 +63,8 @@ export default function SimulationConfig() {
       step_delay_ms: 100,
       algorithm: "priority",
       headless_mode: false,
+      comparison_mode: false,
+      comparison_algorithms: ["priority", "lacam0"],
     }),
     []
   );
@@ -59,6 +80,8 @@ export default function SimulationConfig() {
       step_delay_ms: Math.max(10, Math.floor(stepDelayMs)),
       algorithm,
       headless_mode: headlessMode,
+      comparison_mode: comparisonMode,
+      comparison_algorithms: comparisonAlgorithms,
     };
 
     sessionStorage.setItem(STORAGE_KEY, JSON.stringify(cfg));
@@ -155,8 +178,31 @@ export default function SimulationConfig() {
               description="Skip live rendering — run at full speed and return final statistics only."
               hint={headlessMode && maxTimesteps === 0 ? "⚠ Max Timesteps must be ≥ 1 to use Headless Mode." : undefined}
               checked={headlessMode}
-              onChange={setHeadlessMode}
+              onChange={handleHeadlessChange}
             />
+
+            <ToggleRow
+              icon={<GitCompare size={16} />}
+              label="Comparison Mode"
+              description="Run two algorithms on the same layout headlessly and compare results side-by-side."
+              hint={
+                comparisonMode && maxTimesteps === 0
+                  ? "⚠ Max Timesteps must be ≥ 1 to use Comparison Mode."
+                  : comparisonMode && comparisonAlgorithms.length !== 2
+                  ? "⚠ Select exactly 2 algorithms to compare."
+                  : undefined
+              }
+              checked={comparisonMode}
+              onChange={handleComparisonChange}
+            />
+
+            {comparisonMode && (
+              <AlgorithmPicker
+                all={ALL_ALGORITHMS}
+                selected={comparisonAlgorithms}
+                onChange={setComparisonAlgorithms}
+              />
+            )}
 
              <FieldRow
               icon={<Clock size={16} />}
@@ -192,8 +238,18 @@ export default function SimulationConfig() {
           <button
             className="btnPrimary"
             onClick={saveAndContinue}
-            disabled={headlessMode && maxTimesteps === 0}
-            title={headlessMode && maxTimesteps === 0 ? "Set Max Timesteps ≥ 1 to use Headless Mode" : undefined}
+            disabled={
+              (headlessMode && maxTimesteps === 0) ||
+              (comparisonMode && maxTimesteps === 0) ||
+              (comparisonMode && comparisonAlgorithms.length !== 2)
+            }
+            title={
+              comparisonMode && comparisonAlgorithms.length !== 2
+                ? "Select exactly 2 algorithms to compare"
+                : (headlessMode || comparisonMode) && maxTimesteps === 0
+                ? "Set Max Timesteps ≥ 1 to use this mode"
+                : undefined
+            }
           >
             Continue to Layout →
           </button>
@@ -245,6 +301,45 @@ function ToggleRow(props: {
       </div>
       {props.description ? <div className="fieldDescription">{props.description}</div> : null}
       {props.hint ? <div className="fieldHint">{props.hint}</div> : null}
+    </div>
+  );
+}
+
+function AlgorithmPicker(props: {
+  all: { value: string; label: string }[];
+  selected: string[];
+  onChange: (v: string[]) => void;
+}) {
+  const toggle = (algo: string) => {
+    if (props.selected.includes(algo)) {
+      if (props.selected.length > 1) props.onChange(props.selected.filter(a => a !== algo));
+    } else {
+      const next = props.selected.length < 2
+        ? [...props.selected, algo]
+        : [props.selected[1], algo]; // replace oldest when already 2 selected
+      props.onChange(next);
+    }
+  };
+  return (
+    <div className="algoPickerRow">
+      <span className="algoPickerLabel">Select 2 to compare:</span>
+      <div className="algoPickerChips">
+        {props.all.map((algo) => {
+          const sel = props.selected.includes(algo.value);
+          const order = props.selected.indexOf(algo.value) + 1;
+          return (
+            <button
+              key={algo.value}
+              type="button"
+              className={`algoChip${sel ? " selected" : ""}`}
+              onClick={() => toggle(algo.value)}
+            >
+              {sel && <span className="algoChipBadge">{order}</span>}
+              {algo.label}
+            </button>
+          );
+        })}
+      </div>
     </div>
   );
 }

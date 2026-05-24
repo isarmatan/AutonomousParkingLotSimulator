@@ -16,6 +16,8 @@ type SimConfig = {
   step_delay_ms: number;
   algorithm: string;
   headless_mode?: boolean;
+  comparison_mode?: boolean;
+  comparison_algorithms?: string[];
 };
 
 type LiveSimulationRequest = SimConfig & {
@@ -161,7 +163,9 @@ export default function Simulation() {
   const [saveName, setSaveName]     = useState("");
   const [saving, setSaving]         = useState(false);
   const [headlessResult, setHeadlessResult] = useState<HeadlessResult | null>(null);
-  const [headlessRunning, setHeadlessRunning] = useState(false);
+  const [comparisonResults, setComparisonResults] = useState<HeadlessResult[] | null>(null);
+  const [pendingHeadlessSave, setPendingHeadlessSave] = useState<HeadlessResult | null>(null);
+  const [loadingMessage, setLoadingMessage] = useState("Connecting to simulation…");
 
   // ---- Refs ----
   const wsRef           = useRef<WebSocket | null>(null);
@@ -215,9 +219,33 @@ export default function Simulation() {
           throw new Error("No layout specified.");
         }
 
+        // --- Comparison Mode Branch ---
+        if (config.comparison_mode) {
+          setLoadingMessage("Running comparison simulation…");
+          setWsStatus("IDLE");
+          const comparePayload = {
+            ...basePayload,
+            max_steps: config.max_timesteps,
+            algorithms: config.comparison_algorithms ?? ["priority", "lacam0"],
+          };
+          const cRes = await fetch(`${API_URL}/simulation/compare`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(comparePayload),
+          });
+          if (!cRes.ok) {
+            const txt = await cRes.text();
+            throw new Error(`Comparison failed: ${cRes.statusText}\n${txt}`);
+          }
+          const { results } = await cRes.json();
+          setComparisonResults(results);
+          setLoading(false);
+          return;
+        }
+
         // --- Headless Mode Branch ---
         if (config.headless_mode) {
-          setHeadlessRunning(true);
+          setLoadingMessage("Running headless simulation…");
           setWsStatus("IDLE");
           const headlessPayload = { ...basePayload, max_steps: config.max_timesteps };
           const hRes = await fetch(`${API_URL}/simulation/headless`, {
@@ -231,7 +259,6 @@ export default function Simulation() {
           }
           const result: HeadlessResult = await hRes.json();
           setHeadlessResult(result);
-          setHeadlessRunning(false);
           setLoading(false);
           return;
         }
@@ -348,22 +375,24 @@ export default function Simulation() {
   const isConnected = wsStatus === "RUNNING" || wsStatus === "PAUSED";
 
   const canSave = (wsStatus === "PAUSED" || wsStatus === "COMPLETED") && sessionId !== null;
-  const canSaveHeadless = headlessResult !== null;
+  const canSaveHeadless = headlessResult !== null && comparisonResults === null;
 
   const handleSave = async () => {
     setSaving(true);
     try {
-      if (headlessResult) {
+      const saveTarget = pendingHeadlessSave ?? (headlessResult ? headlessResult : null);
+      if (saveTarget) {
         const res = await fetch(`${API_URL}/simulation/headless/save`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             name: saveName.trim() || "Untitled",
-            result: headlessResult,
+            result: saveTarget,
             config_json: sessionStorage.getItem(CONFIG_KEY),
           }),
         });
         if (!res.ok) throw new Error(await res.text());
+        setPendingHeadlessSave(null);
       } else {
         if (!sessionId) return;
         const res = await fetch(`${API_URL}/simulation/${sessionId}/snapshot`, {
@@ -607,7 +636,80 @@ export default function Simulation() {
           {loading && (
             <div className="loadingContainer">
               <Loader2 className="spinner" size={48} />
-              <p>{headlessRunning ? "Running headless simulation…" : "Connecting to simulation…"}</p>
+              <p>{loadingMessage}</p>
+            </div>
+          )}
+
+          {comparisonResults && !loading && (
+            <div className="comparisonPanel">
+              <div className="comparisonHeader">
+                <span className="comparisonTitle">Algorithm Comparison</span>
+                <span className="comparisonMeta">
+                  {comparisonResults[0]?.grid_width}×{comparisonResults[0]?.grid_height} grid
+                   · 
+                  {comparisonResults[0]?.max_steps.toLocaleString()} max steps
+                </span>
+              </div>
+              <div className="comparisonSides">
+                {comparisonResults.map((result, idx) => (
+                  <div key={idx} className="comparisonSide">
+                    <div className="comparisonSideHeader">
+                      <div className="comparisonSideBadges">
+                        <span className="headlessAlgoBadge">{result.algorithm.toUpperCase()}</span>
+                        <span className={`headlessStatusBadge ${result.status === "COMPLETED" ? "completed" : "partial"}`}>
+                          {result.status.replace(/_/g, " ")}
+                        </span>
+                      </div>
+                      <span className="comparisonSideSteps">{result.completed_steps.toLocaleString()} steps</span>
+                    </div>
+                    <div className="headlessStatGrid">
+                      <div className="headlessStatCard">
+                        <div className="headlessStatTitle">Exited</div>
+                        <div className="headlessStatVal">{result.total_exited}</div>
+                        <div className="headlessStatSub">avg {result.average_steps_to_exit?.toFixed(1) ?? "—"} steps</div>
+                      </div>
+                      <div className="headlessStatCard">
+                        <div className="headlessStatTitle">Arrivals Parked</div>
+                        <div className="headlessStatVal">{result.arriving_cars_parked} / {result.arriving_cars_spawned}</div>
+                        <div className="headlessStatSub">avg {result.average_steps_to_park?.toFixed(1) ?? "—"} steps</div>
+                      </div>
+                      <div className="headlessStatCard">
+                        <div className="headlessStatTitle">Failures</div>
+                        <div className="headlessStatVal">{result.total_failed_plans}</div>
+                        <div className="headlessStatSub">planning errors</div>
+                      </div>
+                      <div className="headlessStatCard">
+                        <div className="headlessStatTitle">Avg Trip</div>
+                        <div className="headlessStatVal">{result.avg_trip_duration_steps?.toFixed(1) ?? "—"}</div>
+                        <div className="headlessStatSub">steps · {result.total_completed_trips} trips</div>
+                      </div>
+                      <div className="headlessStatCard">
+                        <div className="headlessStatTitle">Trip Range</div>
+                        <div className="headlessStatVal">{result.min_trip_duration_steps ?? "—"} – {result.max_trip_duration_steps ?? "—"}</div>
+                        <div className="headlessStatSub">min – max steps</div>
+                      </div>
+                      <div className="headlessStatCard">
+                        <div className="headlessStatTitle">Avg Step Time</div>
+                        <div className="headlessStatVal">{result.avg_planner_ms?.toFixed(2) ?? "—"} ms</div>
+                        <div className="headlessStatSub">peak {result.max_planner_ms?.toFixed(2) ?? "—"} ms</div>
+                      </div>
+                      {result.cpu_usage_avg_percent != null && (
+                        <div className="headlessStatCard">
+                          <div className="headlessStatTitle">CPU Avg</div>
+                          <div className="headlessStatVal">{result.cpu_usage_avg_percent}%</div>
+                          <div className="headlessStatSub">peak {result.cpu_usage_peak_percent}%</div>
+                        </div>
+                      )}
+                    </div>
+                    <button
+                      className="btnSave comparisonSideSave"
+                      onClick={() => { setPendingHeadlessSave(result); setSaveName(""); setSaveModalOpen(true); }}
+                    >
+                      Save {result.algorithm.toUpperCase()}
+                    </button>
+                  </div>
+                ))}
+              </div>
             </div>
           )}
 

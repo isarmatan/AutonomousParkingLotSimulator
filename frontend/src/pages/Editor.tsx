@@ -70,6 +70,7 @@ export default function Editor() {
   const [viewMode, setViewMode] = useState<"2D" | "3D">("3D");
   const [saving, setSaving] = useState(false);
   const [validationErrors, setValidationErrors] = useState<ErrorDTO[]>([]);
+  const [validationRan, setValidationRan] = useState(false);
   const [saveDialogOpen, setSaveDialogOpen] = useState(false);
   const [saveName, setSaveName] = useState("");
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -150,6 +151,7 @@ export default function Editor() {
       if (data.ok) {
         setGrid(data.grid);
         setValidationErrors((prev) => prev.filter((e) => e.x !== x || e.y !== y));
+        setValidationRan(false);
       } else {
         console.warn("Action failed:", data.error);
         setValidationErrors((prev) => [...prev, data.error]);
@@ -171,6 +173,7 @@ export default function Editor() {
       });
       const data = await res.json();
       setValidationErrors(data.errors || []);
+      setValidationRan(true);
     } catch (e) {
       console.error(e);
     }
@@ -422,6 +425,14 @@ export default function Editor() {
                   Validate
                 </button>
               </div>
+
+              {/* Validation Result */}
+              {validationRan && validationErrors.length === 0 && (
+                <div className="editorValidationSuccess">
+                  <CheckCircle size={15} style={{ flexShrink: 0, color: "#4ade80" }} />
+                  <span>Looking good — the grid is valid.</span>
+                </div>
+              )}
 
               {/* Validation Errors */}
               {validationErrors.length > 0 && (
