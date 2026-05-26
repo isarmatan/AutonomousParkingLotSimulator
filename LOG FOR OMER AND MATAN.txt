@@ -1,0 +1,1 @@
+understand lacam0/ PC_TRANSFER_GUIDE.txt explains how to set up lacam in new PC

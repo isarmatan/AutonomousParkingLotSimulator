@@ -1,0 +1,15 @@
+[LaCAM0] ===== t=0 replan | map 20x15 | parked_cells=5 | candidates=1 =====
+  [OK     ] car=5 intent=PARK start=(14,14) map='.' type=ENTRY   parked=False  goal=(14,12) map='.' type=PARKING parked=False
+[LaCAM0] Solving for 1 valid agent(s)...
+[LaCAM0BatchPlanner] Exception at t=0: lacam0 solver failed (exit 3221225781)
+STDOUT:
+STDERR:
+[LaCAM0BatchPlanner] Temp files kept for inspection: C:\Users\omert\AppData\Local\Temp\lacam0_sim_dw1hw5rq
+
+[LaCAM0] ===== t=20 replan | map 20x15 | parked_cells=5 | candidates=1 =====
+  [OK     ] car=5 intent=PARK start=(14,14) map='.' type=ENTRY   parked=False  goal=(14,12) map='.' type=PARKING parked=False
+[LaCAM0] Solving for 1 valid agent(s)...
+[LaCAM0BatchPlanner] Exception at t=20: lacam0 solver failed (exit 3221225781)
+STDOUT:
+STDERR:
+[LaCAM0BatchPlanner] Temp files kept for inspection: C:\Users\omert\AppData\Local\Temp\lacam0_sim_pau1edwl

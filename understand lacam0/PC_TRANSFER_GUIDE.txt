@@ -1,0 +1,76 @@
+PC Transfer Guide - LaCaM0 Setup on a New Machine
+=====================================================
+
+When transferring this project to a new Windows PC, the lacam0 C++ solver
+must be rebuilt locally. The pre-built main.exe from another machine will
+fail with exit code 3221225781 (STATUS_DLL_NOT_FOUND).
+
+No code changes are required - all paths are relative.
+
+
+Prerequisites
+-------------
+- MSYS2 already installed at C:\msys64\ (with MinGW-w64 toolchain)
+  If not: winget install MSYS2.MSYS2
+  Then:   C:\msys64\usr\bin\bash.exe -lc "pacman -S --noconfirm mingw-w64-x86_64-gcc mingw-w64-x86_64-make"
+
+- CMake installed (any version >= 3.16)
+  If not: winget install Kitware.CMake
+
+
+Special Note: Hebrew/Non-ASCII Username
+-----------------------------------------
+If your Windows username contains non-ASCII characters (e.g. Hebrew),
+MinGW's gcc preprocessor (cc1plus.exe) will silently fail when cmake
+tries to compile a test file. The workaround is to build via a temporary
+directory junction with an ASCII path.
+
+
+Build Steps
+-----------
+
+Step 1: Create a temporary directory junction (ASCII path workaround)
+
+    New-Item -ItemType Junction -Path "C:\lacam0_build" -Target "<project_root>\lacam0"
+
+    Replace <project_root> with the full path to this project folder.
+
+Step 2: Configure with cmake (run inside MSYS2 bash for correct PATH)
+
+    C:\msys64\usr\bin\bash.exe -lc "export PATH=/mingw64/bin:$PATH && cd /c/lacam0_build && cmake -B build -G 'MinGW Makefiles' -DCMAKE_BUILD_TYPE=Release"
+
+Step 3: Build
+
+    C:\msys64\usr\bin\bash.exe -lc "export PATH=/mingw64/bin:$PATH && cd /c/lacam0_build && cmake --build build -j4"
+
+Step 4: Copy required runtime DLLs into the build directory
+
+    Copy-Item C:\msys64\mingw64\bin\libstdc++-6.dll    <project_root>\lacam0\build\
+    Copy-Item C:\msys64\mingw64\bin\libgcc_s_seh-1.dll <project_root>\lacam0\build\
+    Copy-Item C:\msys64\mingw64\bin\libwinpthread-1.dll <project_root>\lacam0\build\
+
+Step 5: Remove the junction
+
+    cmd /c "rmdir C:\lacam0_build"
+
+Step 6: Verify
+
+    <project_root>\lacam0\build\main.exe --help
+
+
+Expected Result
+---------------
+lacam0\build\ should contain:
+  - main.exe
+  - libstdc++-6.dll
+  - libgcc_s_seh-1.dll
+  - libwinpthread-1.dll
+
+The backend and lacam_wrapper.py use relative paths, so no code edits are needed.
+
+
+Why These DLLs Are Needed
+--------------------------
+main.exe is dynamically linked against the MinGW runtime.
+Without these DLLs next to the exe, Windows cannot load it (exit 3221225781).
+Copying them into the build folder makes main.exe self-contained.

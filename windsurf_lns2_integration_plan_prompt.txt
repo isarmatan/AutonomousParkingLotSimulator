@@ -1,0 +1,101 @@
+Context:
+We are working on the AutonomousParkingLotSimulator project.
+The project already has LaCAM0 successfully integrated as an external MAPF solver.
+I now want to integrate another MAPF algorithm: MAPF-LNS2.
+
+Repository:
+https://github.com/Jiaoyang-Li/MAPF-LNS2
+
+Important current status:
+- MAPF-LNS2 was successfully built on Windows.
+- I added the MAPF-LNS2 folder to my environment/project workspace.
+- LaCAM0 is already integrated and working.
+- Please use the existing LaCAM0 integration only as context/reference.
+- Please do not blindly reuse LaCAM0-specific core/manager classes because that may introduce bugs.
+- The goal is to create a clean, separate LNS2 integration.
+
+Your task:
+Create a detailed implementation plan for integrating MAPF-LNS2 into the project.
+Do not implement yet. Output only the plan first.
+
+What you should scan first:
+1. Scan the MAPF-LNS2 folder.
+   - Understand how to run the executable on Windows.
+   - Identify the required command-line arguments.
+   - Check whether it uses the same or similar input format as LaCAM0, especially .map and .scen files.
+   - Test it with a small map/scenario if possible.
+   - Inspect the expected output format, especially paths output.
+   - Compare its input/output behavior to LaCAM0.
+
+2. Scan the existing AutonomousParkingLotSimulator project.
+   - Find the existing LaCAM0 wrapper / adapter.
+   - Find every class/file that was added or modified for LaCAM0 integration.
+   - Understand the flow from simulation configuration to solver execution to path parsing.
+   - Understand how map/scen generation is currently handled.
+   - Understand how ghost goals / ghost parking spots / exit handling are handled for LaCAM0.
+   - Understand how the frontend selects the algorithm and how the backend routes the request.
+
+Main integration requirement:
+Integrate LNS2 in a way that is similar in architecture to LaCAM0, but separated enough to avoid coupling and bugs.
+
+Please create separate LNS2-specific classes/files where appropriate, for example:
+- LNS2Planner
+- LNS2Wrapper or LNS2SolverWrapper
+- LNS2OutputParser
+- LNS2SimulationCore, only if needed
+- LNS2-specific config/path settings
+- LNS2-specific tests
+
+Reuse is allowed only where safe:
+- If the existing .map generator can be reused safely, reuse it.
+- If the existing .scen generator can be reused safely, reuse it.
+- If shared utility functions are generic and not LaCAM0-specific, reuse them.
+- If something is coupled to LaCAM0 behavior, create a separate LNS2 version instead.
+
+Please avoid:
+- Reusing the same simulation core if it has LaCAM0-specific assumptions.
+- Modifying the working LaCAM0 implementation unless absolutely necessary.
+- Breaking PriorityPlanner or LaCAM0.
+- Mixing LaCAM0 and LNS2 logic in the same classes in a confusing way.
+- Implementing before I approve the plan.
+
+Questions the plan should answer:
+1. Is MAPF-LNS2 input fully compatible with the current LaCAM0 map/scen generation?
+2. Is MAPF-LNS2 output similar enough to parse with the same parser, or does it need a new parser?
+3. Does LNS2 return a full global MAPF solution for all active agents?
+4. How should LNS2 be called from the backend?
+5. Where should the LNS2 executable path be configured?
+6. What files/classes should be added?
+7. What files/classes should be modified?
+8. Which existing LaCAM0 components can be safely reused?
+9. Which components should remain separate?
+10. What tests should be added to validate the integration?
+11. What risks exist compared to LaCAM0?
+12. How should timeout handling work for LNS2?
+13. How should failed/no-solution cases be handled?
+14. How should ghost exits / duplicate goals be handled for LNS2?
+15. How should we expose LNS2 as a new algorithm option in the UI?
+
+Expected output:
+Please produce a structured integration plan as a .txt file or markdown-style plan.
+The plan should include:
+
+1. Current architecture summary
+2. LaCAM0 integration summary
+3. MAPF-LNS2 input/output investigation
+4. Similarities and differences between LaCAM0 and LNS2
+5. Proposed LNS2 architecture
+6. Exact classes/files to add
+7. Exact classes/files to modify
+8. Reusable components
+9. Components that must stay separate
+10. Backend API changes
+11. Frontend UI/config changes
+12. Output parsing strategy
+13. Error/timeout handling strategy
+14. Testing strategy
+15. Step-by-step implementation phases
+
+Important:
+The first response should be a plan only.
+Do not implement anything before I approve.

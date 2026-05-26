@@ -1,0 +1,61 @@
+ALGORITHM MODULARITY ANALYSIS
+=============================
+
+1. Executive Summary
+--------------------
+The backend is moderately modular. Replacing the specific pathfinding algorithm (e.g., swapping A* for Dijkstra or JPS) while keeping the "Priority-Based" architecture is VERY EASY. However, switching to a completely different paradigm (like Centralized MAPF, CBS, or optimization-based solvers) would be MODERATELY DIFFICULT because the SimulationCore is currently tightly coupled to the specific `ReservationTable` mechanism exposed by the current planner.
+
+2. Structural Analysis
+----------------------
+
+A. SimulationCore (The Orchestrator)
+   - **Strengths**: 
+     - Uses dependency injection for the planner (`__init__(..., priority_planner, ...)`).
+     - Does not hardcode `single_agent_a_star`; it calls `priority_planner.plan_for_car()`.
+   - **Weaknesses (Coupling)**:
+     - **Leaky Abstraction**: The core directly accesses `self.priority_planner.reservation_table`.
+     - **Direct Manipulation**: The core manually calls `reserve_goal` and `unreserve_goal` for parked cars and waiting cars.
+     - **Spawning Logic**: The methods `_get_free_entry` and `_get_free_road_cell` directly query `is_cell_free` on the reservation table to check for future safety.
+     - **Assumption of Architecture**: The core assumes a "decoupled with reservation" architecture. A centralized solver might not expose a reservation table in this way.
+
+B. PriorityPlanner (The Policy Layer)
+   - **Strengths**:
+     - Defines a clear "contract": `plan_for_car` and `cancel_plan`.
+     - Encapsulates the actual pathfinding call (`single_agent_a_star`).
+   - **Weaknesses**:
+     - Exposes its internal state (`reservation_table`) as a public attribute which the Core relies on.
+
+C. ParkingManager
+   - **Strengths**:
+     - Highly modular. It concerns itself only with high-level goal assignment (Entry -> Parking Spot -> Exit).
+     - Completely agnostic to the pathfinding algorithm.
+
+3. Feasibility of "Selectable Algorithm" Feature
+------------------------------------------------
+
+Scenario A: Swapping the Low-Level Pathfinder (Easy)
+----------------------------------------------------
+If you want to let users choose between "A*", "Breadth-First Search", or "Dijkstra":
+- **Effort**: Low.
+- **Implementation**: 
+  1. Update `PriorityPlanner` to accept an `algorithm_type` argument.
+  2. Inside `plan_for_car`, dispatch to the chosen function in `single_agent_planner.py`.
+  3. No changes needed in `SimulationCore`.
+
+Scenario B: Swapping the High-Level Coordination Strategy (Medium/Hard)
+-----------------------------------------------------------------------
+If you want to let users choose between "Priority Planning" (current) and "CBS (Conflict-Based Search)" or "Centralized ILP":
+- **Effort**: Medium-High.
+- **Implementation**:
+  1. You would need to define an abstract base class `Planner` that `SimulationCore` talks to.
+  2. **Refactoring Required**: You must abstract away the `reservation_table` usage.
+     - Instead of `core.priority_planner.reservation_table.reserve_goal(...)`, the Core should call `core.planner.notify_parked(car)`.
+     - Instead of `core.priority_planner.reservation_table.is_cell_free(...)`, the Core should call `core.planner.is_safe_to_spawn(x, y, time)`.
+  3. Once these "leaky" calls are wrapped in generic methods, swapping the planner becomes easy.
+
+4. Recommendation
+-----------------
+To support algorithm selection properly, I recommend a small refactoring step first:
+1. Create a `PlannerProtocol` or abstract base class.
+2. Move the `reserve_goal`, `unreserve_goal`, and `is_cell_free` calls inside `SimulationCore` to methods on the `PriorityPlanner` class itself (e.g., `planner.reserve_static_obstacle`, `planner.check_availability`).
+3. This will hide the `reservation_table` implementation detail, making the system strongly modular and ready for any algorithm plugin.

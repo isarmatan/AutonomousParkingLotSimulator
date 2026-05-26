@@ -1,0 +1,96 @@
+================================================================================
+  MAPF-LNS2 — Windows Setup Guide
+================================================================================
+
+OVERVIEW
+--------
+MAPF-LNS2 solves Multi-Agent Path Finding (MAPF) via Large Neighborhood Search.
+It requires a C++ compiler, CMake, the Boost library, and the Eigen3 library.
+
+--------------------------------------------------------------------------------
+REQUIREMENTS
+--------------------------------------------------------------------------------
+
+1. MSYS2 (provides the MinGW-w64 GCC toolchain)
+   - Download and install from: https://www.msys2.org/
+   - Default install path: C:\msys64
+
+2. CMake (version >= 3.16)
+   - Already available at C:\msys64\mingw64\bin\cmake.exe after step below,
+     OR install standalone from: https://cmake.org/download/
+
+3. GCC (C++14 or later)
+   - Provided by the mingw-w64-x86_64-gcc package in MSYS2.
+
+4. Boost (>= 1.60 recommended, 1.90.0 tested)
+   - Components used: program_options, system, filesystem
+
+5. Eigen3 (>= 3.3, version 5.0.1 tested via MSYS2)
+   - Used for linear algebra in the PIBT solver module.
+
+--------------------------------------------------------------------------------
+INSTALLATION STEPS
+--------------------------------------------------------------------------------
+
+Step 1 — Install MSYS2
+  Download from https://www.msys2.org/ and install to C:\msys64
+
+Step 2 — Install required packages via pacman
+  Open a PowerShell window and run:
+
+    C:\msys64\usr\bin\bash.exe -l -c "pacman -S --noconfirm mingw-w64-x86_64-gcc mingw-w64-x86_64-boost mingw-w64-x86_64-eigen3 mingw-w64-x86_64-cmake mingw-w64-x86_64-make"
+
+  This installs: GCC, Boost, Eigen3, CMake, and Make inside the MSYS2
+  mingw64 environment.
+
+Step 3 — Configure the project with CMake
+  From PowerShell, run:
+
+    $env:MSYSTEM = "MINGW64"
+    $env:PATH = "C:\msys64\mingw64\bin;C:\msys64\usr\bin;" + $env:PATH
+    C:\msys64\usr\bin\bash.exe --login -c "mkdir -p /c/dev/LNS2/MAPF-LNS2/build && cd /c/dev/LNS2/MAPF-LNS2/build && cmake .. -G 'MinGW Makefiles' -DCMAKE_BUILD_TYPE=RELEASE"
+
+  Adjust the path /c/dev/LNS2/MAPF-LNS2 to match your actual project location.
+
+Step 4 — Build the project
+  From PowerShell, run:
+
+    $env:MSYSTEM = "MINGW64"
+    $env:PATH = "C:\msys64\mingw64\bin;C:\msys64\usr\bin;" + $env:PATH
+    C:\msys64\usr\bin\bash.exe --login -c "cd /c/dev/LNS2/MAPF-LNS2/build && mingw32-make -j4"
+
+  On success, the binary is created at:
+    build\lns.exe
+
+--------------------------------------------------------------------------------
+WINDOWS-SPECIFIC SOURCE FIXES (already applied in this repo)
+--------------------------------------------------------------------------------
+
+Two patches were needed to compile on Windows with MinGW-w64:
+
+1. CMakeLists.txt
+   - Changed: find_package(Eigen3 3.3 REQUIRED NO_MODULE)
+   - To:      find_package(Eigen3 REQUIRED NO_MODULE)
+   - Reason:  MSYS2 ships Eigen 5.0.1; the strict "3.3" version check in CMake
+              rejected it as incompatible even though the API is backward-compatible.
+
+2. PIBT source files (18 files in src/PIBT/ and inc/PIBT/)
+   - Renamed parameter _MT -> mt_rng in all constructors.
+   - Reason:  _MT is a preprocessor macro defined as 1 in the Windows/MinGW
+              runtime headers (signals multithreaded CRT). Any occurrence of
+              std::mt19937* _MT in a function signature expanded to
+              std::mt19937* 1, causing a compile error.
+
+--------------------------------------------------------------------------------
+RUNNING THE BINARY
+--------------------------------------------------------------------------------
+
+The compiled binary depends on DLLs from C:\msys64\mingw64\bin\.
+Prepend this to your PATH before running:
+
+  $env:PATH = "C:\msys64\mingw64\bin;" + $env:PATH
+  .\build\lns.exe --help
+
+See LNS2_API.md for full usage instructions and output format documentation.
+
+================================================================================

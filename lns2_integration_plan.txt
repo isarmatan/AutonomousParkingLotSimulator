@@ -1,0 +1,591 @@
+================================================================================
+  MAPF-LNS2 Integration Plan
+  AutonomousParkingLotSimulator — lifelong-lacam0-stable
+================================================================================
+
+--------------------------------------------------------------------------------
+1. CURRENT ARCHITECTURE SUMMARY
+--------------------------------------------------------------------------------
+
+The backend is a FastAPI app (backend/api_app.py) with a main simulation router
+at backend/simulation_api/simulation_router.py.
+
+When a simulation is started, the router branches on req.algorithm:
+  - "priority"  → ParkingManager + SimulationCore (priority A* planner)
+  - "lacam0"    → LaCAM0ParkingManager + GhostExitManager + LaCAM0BatchPlanner
+                  + LaCAM0SimulationCore
+
+Three entry points exist in the router:
+  POST /simulation/start    → live session (WebSocket-driven)
+  POST /simulation/headless → one-shot batch run, returns stats
+  POST /simulation/compare  → runs N algorithms on same grid, returns all stats
+
+The frontend (frontend/src/pages/SimulationConfig.tsx) has an ALL_ALGORITHMS
+array that drives the dropdown. Currently:
+  { value: "priority", label: "Priority Planner" }
+  { value: "lacam0",   label: "LaCAM0" }
+
+
+--------------------------------------------------------------------------------
+2. LaCAM0 INTEGRATION SUMMARY
+--------------------------------------------------------------------------------
+
+FILES ADDED for LaCAM0:
+  lacam0/lacam_wrapper.py             subprocess wrapper around build/main.exe
+  backend/planning/lacam0_map_generator.py   .map file generator (MovingAI fmt)
+  backend/planning/lacam0_scen_generator.py  .scen file generator (MovingAI fmt)
+  backend/planning/lacam0_batch_planner.py   orchestrates one solve call
+  backend/planning/ghost_exit_manager.py     unique ghost goals for exiting cars
+  backend/core/lacam0_parking_manager.py     extends ParkingManager with ghost goals
+  backend/core/lacam0_simulation_core.py     full lifelong simulation loop
+
+FILES MODIFIED for LaCAM0:
+  backend/simulation_api/simulation_router.py  added "lacam0" branch
+  backend/simulation_api/simulation_dtos.py    added algorithm: str field
+  frontend/src/pages/SimulationConfig.tsx      added lacam0 to ALL_ALGORITHMS
+
+FLOW (LaCAM0):
+  Request arrives → router creates GhostExitManager + LaCAM0ParkingManager
+    → LaCAM0BatchPlanner (holds LaCaM solver instance)
+    → LaCAM0SimulationCore (owns the step loop)
+
+  Each replan event:
+    LaCAM0SimulationCore._trigger_replan_if_needed()
+      → LaCAM0BatchPlanner.plan()
+          → generate_map()   writes temp .map
+          → generate_scen()  writes temp .scen
+          → LaCaM.solve()    runs main.exe via subprocess
+          → parses result.txt (timestep-indexed solution)
+          → returns Dict[car_id → List[(x, y, t)]]
+      → attaches paths to each Car object
+
+
+--------------------------------------------------------------------------------
+3. MAPF-LNS2 INPUT/OUTPUT INVESTIGATION
+--------------------------------------------------------------------------------
+
+Binary location:  MAPF-LNS2/build/lns.exe
+                  (already built and confirmed working)
+DLL dependency:   C:\msys64\mingw64\bin must be in PATH at runtime
+                  (unlike LaCAM0 which has bundled DLLs in its build/ dir)
+
+--- INPUT FORMAT ---
+
+Map file: IDENTICAL to LaCAM0 — standard MovingAI octile format:
+  type octile
+  height H
+  width W
+  map
+  ....@@....
+  ...
+
+Scenario file: IDENTICAL to LaCAM0 — standard MovingAI .scen format:
+  version 1
+  0<TAB>map.map<TAB>W<TAB>H<TAB>sx<TAB>sy<TAB>gx<TAB>gy<TAB>0.0
+
+CONCLUSION: lacam0_map_generator.py and lacam0_scen_generator.py are fully
+reusable for LNS2 without any modification.
+
+--- CLI FLAG DIFFERENCES vs LaCAM0 ---
+
+  Feature            LaCAM0 (main.exe)         LNS2 (lns.exe)
+  -----------------  ------------------------  -------------------------
+  Scenario file      -i agents.scen            -a agents.scen
+  Agent count        -N 10                     -k 10
+  Path output        -o result.txt (IS paths)  --outputPaths paths.txt
+  Summary output     (same -o is paths file)   -o name  → name-LNS.csv
+  Time limit         -t 3.0 (seconds, float)   -t 5 (seconds, integer)
+  Verbosity          -v 1                      -s 1
+  Scen required?     No (random if omitted)     Yes (always required)
+
+  LNS2-only flags (for tuning, expose optionally):
+    --initAlgo        PP | EECBS | CBS | PIBT | winPIBT | PPS
+    --replanAlgo      PP | EECBS | CBS
+    --destoryStrategy Random | RandomWalk | Intersection | Adaptive
+    --neighborSize    default=8
+    --maxIterations   default=0 (run until time limit)
+    --seed            default=0
+
+--- OUTPUT FORMAT (CRITICAL DIFFERENCE) ---
+
+LaCAM0 result.txt — TIMESTEP-INDEXED (rows = time, cols = agents):
+  solved=1
+  agents=5
+  makespan=44
+  soc=171
+  ...
+  0:(1,2),(3,4),(5,6)     ← t=0: position of every agent
+  1:(2,2),(4,4),(6,6)     ← t=1
+  2:(3,2),(5,4),(7,6)     ← t=2
+
+LNS2 paths.txt — AGENT-INDEXED (rows = agents, cols = time):
+  Agent 0:(16,5)->(15,5)->(15,6)->...    ← agent 0: all positions over time
+  Agent 1:(29,21)->(30,21)->(30,22)->...  ← agent 1
+
+These layouts are TRANSPOSED. A new dedicated parser is required for LNS2.
+The LaCAM0 _parse_result() function cannot be reused.
+
+--- COORDINATE CONVENTION ---
+
+LaCAM0 output: (x, y) where x = column, y = row  → matches our grid system
+LNS2 output:   (row, col) based on the LNS2 source internal representation
+               → must swap: world_x = col (second value), world_y = row (first value)
+
+ACTION REQUIRED: Verify coordinate convention by running lns.exe with a known
+single-agent scenario and checking that parsed position matches expected grid cell.
+This is a risk item — implement a coordinate-swap toggle in the wrapper and test.
+
+--- SOLVED / UNSOLVED DETECTION ---
+
+LaCAM0: explicit "solved=1" or "solved=0" field in result.txt
+LNS2:   NO explicit solved field.
+        Success = paths file exists AND contains at least one "Agent N:..." line
+        Failure = exit code != 0, OR paths file missing, OR paths file empty
+
+--- UNIQUE GOALS REQUIREMENT ---
+
+LNS2 is a full MAPF solver (not single-agent), so it also requires each agent
+to have a UNIQUE goal cell. GhostExitManager is therefore required for LNS2
+exactly as for LaCAM0 — no changes needed to GhostExitManager.
+
+
+--------------------------------------------------------------------------------
+4. SIMILARITIES AND DIFFERENCES: LaCAM0 vs LNS2
+--------------------------------------------------------------------------------
+
+SAME:
+  - MovingAI .map and .scen input format
+  - Unique goal constraint → GhostExitManager fully reusable
+  - Per-replan-event batch planning model
+  - Ghost exit goal logic for exiting cars
+  - Parked cars as '@' obstacles in the map
+  - Overall simulation orchestration pattern
+
+DIFFERENT:
+  - CLI flags (-i vs -a, -N vs -k, -o semantics completely different)
+  - Output file format (timestep-indexed vs agent-indexed)
+  - Coordinate order in output ((x,y) vs (row,col))
+  - No "solved" boolean in output
+  - DLL handling (PATH-based vs bundled)
+  - LNS2 has richer tuning parameters
+  - LNS2 may take longer on initial solve (initLNS phase); time budget must be set
+
+
+--------------------------------------------------------------------------------
+5. PROPOSED LNS2 ARCHITECTURE
+--------------------------------------------------------------------------------
+
+Pattern: mirror the LaCAM0 integration cleanly, with LNS2-specific classes
+that do NOT inherit from LaCAM0 classes, but may call shared utilities.
+
+                         [simulation_router.py]
+                              |           |
+              algorithm="lacam0"      algorithm="lns2"
+                    |                       |
+         LaCAM0ParkingManager       LNS2ParkingManager (new)
+         GhostExitManager (shared)  GhostExitManager (shared, same instance)
+         LaCAM0BatchPlanner         LNS2BatchPlanner (new)
+         LaCAM0SimulationCore       LNS2SimulationCore (new)
+              |                          |
+         LaCaM (wrapper)            LNS2Solver (new wrapper)
+              |                          |
+         lacam0/build/main.exe      MAPF-LNS2/build/lns.exe
+
+
+Shared / reused without modification:
+  backend/planning/lacam0_map_generator.py   (reused by name)
+  backend/planning/lacam0_scen_generator.py  (reused by name)
+  backend/planning/ghost_exit_manager.py     (reused by name)
+
+
+--------------------------------------------------------------------------------
+6. EXACT FILES TO ADD
+--------------------------------------------------------------------------------
+
+A)  MAPF-LNS2/lns2_wrapper.py
+    Purpose: subprocess wrapper around lns.exe, analogous to lacam_wrapper.py
+    Contents:
+      - LNS2Result dataclass: solved, agents, paths (List[List[(x,y)]])
+        also stores: runtime, solution_cost, initial_solution_cost, iterations
+      - LNS2Solver dataclass:
+          exe: str = <path to lns.exe, relative to this file>
+          time_limit_sec: float = 5.0
+          init_algo: str = "PP"
+          replan_algo: str = "PP"
+          seed: int = 0
+          method: solve(map_file, scen_file, num_agents, output_file=None)
+      - _parse_lns2_paths(paths_file) → List[List[Tuple[int,int]]]
+          Parses "Agent N:(r,c)->(r,c)->..." into agent-indexed list
+          Transposes to timestep-indexed: solution[t] = [(x0,y0),(x1,y1),...]
+          Applies coordinate swap: (row,col) → (x=col, y=row)
+      - PATH setup: wrapper sets PATH to include C:\msys64\mingw64\bin
+        before subprocess.run() using env= parameter (non-invasive, no global PATH change)
+
+B)  backend/planning/lns2_batch_planner.py
+    Purpose: analogous to lacam0_batch_planner.py
+    Contents:
+      - LNS2BatchPlanner class
+          __init__(time_limit_sec=5.0, replan_interval=20)
+          plan(active_cars, grid, parked_cells, current_time,
+               ghost_exit_manager=None) → Optional[Dict[car_id, List[(x,y,t)]]]
+      - Same pre-validation logic (check start/goal passable before calling solver)
+      - Imports: lacam0_map_generator.generate_map (reuse)
+                 lacam0_scen_generator.generate_scen (reuse)
+                 lns2_wrapper.LNS2Solver
+      - sys.path manipulation to find lns2_wrapper.py (same pattern as lacam0)
+        _LNS2_DIR = Path(__file__).resolve().parent.parent.parent / "MAPF-LNS2"
+
+C)  backend/core/lns2_simulation_core.py
+    Purpose: analogous to lacam0_simulation_core.py
+    Contents:
+      - LNS2SimulationCore class
+      - Identical public API as LaCAM0SimulationCore (same fields/methods)
+      - Takes batch_planner argument (receives LNS2BatchPlanner)
+      - Step loop is structurally identical to LaCAM0SimulationCore
+      - Named separately to avoid coupling and allow future divergence
+
+    NOTE: LaCAM0SimulationCore is already batch-planner-agnostic (it only calls
+    self.batch_planner.plan()). However, per the design principle of keeping
+    integrations separate, a new file is created. The implementation can be
+    near-identical to LaCAM0SimulationCore with "LaCAM0" replaced by "LNS2"
+    in all comments and log strings.
+
+D)  backend/core/lns2_parking_manager.py
+    Purpose: analogous to lacam0_parking_manager.py
+    Contents:
+      - LNS2ParkingManager(ParkingManager) — identical logic to
+        LaCAM0ParkingManager; delegates EXIT goals to GhostExitManager
+      - Kept separate to allow future LNS2-specific goal assignment logic
+
+
+--------------------------------------------------------------------------------
+7. EXACT FILES TO MODIFY
+--------------------------------------------------------------------------------
+
+A)  backend/simulation_api/simulation_router.py
+    Changes:
+      1. Add imports at top:
+           from core.lns2_simulation_core import LNS2SimulationCore
+           from core.lns2_parking_manager import LNS2ParkingManager
+           from planning.lns2_batch_planner import LNS2BatchPlanner
+
+      2. In start_simulation() → simulation_factory():
+           Add elif req.algorithm == "lns2": block (same structure as lacam0 block)
+
+      3. In _build_and_run_headless():
+           Add elif req.algorithm == "lns2": block (same structure as lacam0 block)
+
+      NOTE: /run endpoint (run_simulation) hardcodes "priority" — no change needed.
+
+B)  frontend/src/pages/SimulationConfig.tsx
+    Changes:
+      1. Add to ALL_ALGORITHMS array:
+           { value: "lns2", label: "MAPF-LNS2" }
+      2. No other changes needed — the algorithm value flows through unchanged
+
+
+--------------------------------------------------------------------------------
+8. REUSABLE COMPONENTS (safe to reuse without modification)
+--------------------------------------------------------------------------------
+
+  backend/planning/lacam0_map_generator.py
+    → Pure function, zero LaCAM0-specific logic, generates standard MovingAI map.
+    → Import as: from planning.lacam0_map_generator import generate_map
+
+  backend/planning/lacam0_scen_generator.py
+    → Pure function, zero LaCAM0-specific logic, generates standard MovingAI scen.
+    → Import as: from planning.lacam0_scen_generator import generate_scen
+
+  backend/planning/ghost_exit_manager.py
+    → Fully generic. No solver-specific logic whatsoever.
+    → Used identically for LNS2 as for LaCAM0.
+
+  backend/core/parking_manager.py
+    → Base class, unchanged.
+
+
+--------------------------------------------------------------------------------
+9. COMPONENTS THAT MUST REMAIN SEPARATE
+--------------------------------------------------------------------------------
+
+  lacam0_batch_planner.py  ←→  lns2_batch_planner.py
+    Different CLI flags, different output parsing, different wrapper import.
+    These must never be merged.
+
+  lacam_wrapper.py  ←→  lns2_wrapper.py
+    Completely different subprocess command structure and output format.
+
+  lacam0_simulation_core.py  ←→  lns2_simulation_core.py
+    Kept separate to allow independent tuning and debugging.
+    If a bug is found in one, it must not silently affect the other.
+
+  LaCAM0ParkingManager  ←→  LNS2ParkingManager
+    Separate classes even though logic is currently identical.
+    LNS2 may need different goal assignment heuristics in the future.
+
+
+--------------------------------------------------------------------------------
+10. BACKEND API CHANGES
+--------------------------------------------------------------------------------
+
+  simulation_router.py:
+    - Add lns2 branch in start_simulation() (live sessions)
+    - Add lns2 branch in _build_and_run_headless() (headless + compare)
+    - No new endpoints needed
+
+  simulation_dtos.py:
+    - No changes needed. algorithm: str is already open-ended.
+    - LiveSimulationRequest.algorithm comment: update from "priority | lacam0"
+      to "priority | lacam0 | lns2"
+
+  planner_manager.py:
+    - No changes needed (only used by priority planner path)
+
+
+--------------------------------------------------------------------------------
+11. FRONTEND UI/CONFIG CHANGES
+--------------------------------------------------------------------------------
+
+  SimulationConfig.tsx:
+    1. Add to ALL_ALGORITHMS:
+         { value: "lns2", label: "MAPF-LNS2" }
+    2. Optionally update default comparison_algorithms to include lns2:
+         ["lacam0", "lns2"]  or keep as ["priority", "lacam0"]
+    3. Consider adding a tooltip or info note explaining LNS2 is slower to start
+       (has an initialization phase) but finds higher-quality solutions.
+
+  No other frontend files need modification.
+  Algorithm value is passed as a plain string all the way through.
+
+
+--------------------------------------------------------------------------------
+12. OUTPUT PARSING STRATEGY
+--------------------------------------------------------------------------------
+
+LNS2 output (paths.txt):
+  Agent 0:(16,5)->(15,5)->(15,6)->
+  Agent 1:(29,21)->(30,21)->(30,22)->
+
+Parser steps (_parse_lns2_paths in lns2_wrapper.py):
+
+  Step 1 — Read each line, extract agent index and position chain:
+    pattern: r"^Agent (\d+):(.+)$"
+    positions: r"\((\d+),(\d+)\)"
+
+  Step 2 — Apply coordinate swap:
+    LNS2 stores (row, col) internally.
+    Our grid uses (x=col, y=row).
+    So: x = second_int, y = first_int
+    *** VERIFY THIS during Phase 1 testing — run a known single-agent case ***
+
+  Step 3 — Build agent-indexed list:
+    agent_paths[agent_idx] = [(x0,y0), (x1,y1), ...]
+
+  Step 4 — Transpose to timestep-indexed for API consistency with LaCAM0:
+    makespan = max(len(p) for p in agent_paths)
+    solution[t] = [agent_paths[i][t] if t < len(agent_paths[i])
+                   else agent_paths[i][-1]  # hold final position
+                   for i in range(num_agents)]
+
+  LNS2Result.solved:
+    True  if paths file exists, is non-empty, and at least 1 agent has a path
+    False otherwise
+
+  The LNS2BatchPlanner converts the timestep-indexed solution back to per-car
+  timed paths (x, y, t) — identical logic to LaCAM0BatchPlanner.
+
+
+--------------------------------------------------------------------------------
+13. ERROR / TIMEOUT HANDLING
+--------------------------------------------------------------------------------
+
+  Timeout:
+    - Always pass -t <time_limit_sec> to lns.exe (no default should be relied on)
+    - Recommended default: 5 seconds (vs LaCAM0's 3s — LNS2 needs init time)
+    - LNS2 will return the best solution found within the time limit even if
+      not globally optimal; this is different from LaCAM0 which either solves
+      or fails cleanly.
+
+  Exit code != 0:
+    - Raise RuntimeError with stdout/stderr in message (same as LaCAM0)
+    - Log temp files for inspection (same pattern as LaCAM0BatchPlanner)
+
+  Paths file missing or empty:
+    - Treat as "not solved" (return None from plan())
+    - LNS2BatchPlanner returns None → SimulationCore keeps existing paths
+
+  DLL not found (exit 3221225781 or similar):
+    - The wrapper sets PATH in subprocess env, so this should not occur
+    - Add detection and a clear error message pointing to lns2_wrapper.py PATH setup
+
+  Agents with blocked start/goal:
+    - Same pre-validation as LaCAM0BatchPlanner (check map chars before calling solver)
+    - Exclude blocked agents; if none remain plannable, return None
+
+  All agents at goal already:
+    - Return empty dict {} (same as LaCAM0)
+
+
+--------------------------------------------------------------------------------
+14. TESTING STRATEGY
+--------------------------------------------------------------------------------
+
+Unit tests to add:
+
+  A)  backend/tests/test_lns2_wrapper.py
+        - test_lns2_smoke: run lns.exe on MAPF-LNS2/random-32-32-20.map
+          with k=5, t=5, verify LNS2Result.solved == True
+        - test_lns2_coordinate_check: use a 1-agent case with known start/goal,
+          verify parsed (x,y) matches expected grid coordinates (CRITICAL)
+        - test_lns2_timeout: run with t=0.001 (very short), verify graceful failure
+
+  B)  backend/tests/test_lns2_batch_planner.py
+        - test_lns2_batch_single_car: create a minimal grid, 1 car, verify plan()
+          returns a valid timed path
+        - test_lns2_batch_multi_car: 3 cars, verify no path collisions
+        - test_lns2_batch_exit_car: car with EXIT intent, verify ghost goal
+          assignment and planner_to_world translation
+
+  C)  Manual integration test (documented, not automated):
+        - Start full backend, open frontend, run a live simulation with LNS2,
+          verify cars move without collisions and eventually park/exit.
+
+
+--------------------------------------------------------------------------------
+15. STEP-BY-STEP IMPLEMENTATION PHASES
+--------------------------------------------------------------------------------
+
+PHASE 1 — Wrapper + Parser  (MAPF-LNS2/lns2_wrapper.py)
+  1.1  Create LNS2Result dataclass
+  1.2  Create LNS2Solver dataclass with solve() method
+       - Build CLI command with correct flags (-a, -k, --outputPaths, -t)
+       - Set PATH env var to include C:\msys64\mingw64\bin in subprocess call
+  1.3  Implement _parse_lns2_paths()
+       - Parse "Agent N:(r,c)->(r,c)->..." lines
+       - Transpose to timestep-indexed
+  1.4  CRITICAL: verify coordinate convention
+       - Run lns.exe with 1 agent, known start and goal
+       - Check whether parsed (first_int, second_int) = (row, col) or (col, row)
+       - Adjust swap logic accordingly
+  1.5  Add wrapper unit test (test_lns2_wrapper.py)
+
+PHASE 2 — BatchPlanner  (backend/planning/lns2_batch_planner.py)
+  2.1  Create LNS2BatchPlanner with same plan() signature as LaCAM0BatchPlanner
+  2.2  Wire in lns2_wrapper.LNS2Solver
+  2.3  Reuse generate_map() and generate_scen() imports
+  2.4  Add same pre-validation loop (check start/goal passable)
+  2.5  Convert LNS2Result.solution to Dict[car_id → List[(x,y,t)]]
+  2.6  Add batch planner test (test_lns2_batch_planner.py)
+
+PHASE 3 — ParkingManager + SimulationCore
+  3.1  Create lns2_parking_manager.py (LNS2ParkingManager extends ParkingManager)
+  3.2  Create lns2_simulation_core.py (LNS2SimulationCore)
+       - Copy structure from LaCAM0SimulationCore
+       - Replace all "LaCAM0" labels with "LNS2" in logs/comments
+       - Keep identical public API
+
+PHASE 4 — Router Integration
+  4.1  Add imports to simulation_router.py
+  4.2  Add "lns2" branch in start_simulation()
+  4.3  Add "lns2" branch in _build_and_run_headless()
+  4.4  Test via curl/Postman: POST /simulation/headless with algorithm="lns2"
+
+PHASE 5 — Frontend
+  5.1  Add LNS2 to ALL_ALGORITHMS in SimulationConfig.tsx
+  5.2  Smoke-test in browser: select LNS2, run headless, check results
+
+PHASE 6 — Testing & Polish
+  6.1  Run all backend tests
+  6.2  Run comparison mode: lacam0 vs lns2 on same grid
+  6.3  Verify stats (avg_planner_ms, total_parked, etc.) look reasonable for LNS2
+  6.4  Document any LNS2-specific tuning recommendations
+
+
+--------------------------------------------------------------------------------
+RISK REGISTER
+--------------------------------------------------------------------------------
+
+RISK 1 (HIGH): Coordinate convention mismatch
+  LNS2 may output (row,col) not (col,row). If the swap is wrong, cars will
+  navigate to mirrored positions. Must verify in Phase 1.4 before any other work.
+
+RISK 2 (MEDIUM): DLL not found on PATH change
+  lns.exe depends on C:\msys64\mingw64\bin DLLs. The wrapper sets PATH in the
+  subprocess env, but this must be tested. Alternative: copy DLLs to MAPF-LNS2/build/.
+
+RISK 3 (MEDIUM): Longer initial solve time
+  LNS2 runs an initLNS phase before the main LNS loop. With a short time budget
+  (3s), the initial solution may not be found. Use 5s minimum; expose as a
+  configurable parameter.
+
+RISK 4 (LOW): Agent path length mismatch
+  LaCAM0 pads all agents to the same makespan. LNS2 agents may have different
+  path lengths. The parser must pad shorter paths by holding the final position.
+
+RISK 5 (LOW): LNS2 does not support random start placement (no -i omission)
+  scen file is always required for LNS2. The scen generator already writes it,
+  so this is handled — but the wrapper must always pass -a (never omit it).
+
+
+--------------------------------------------------------------------------------
+ANSWERS TO THE 15 QUESTIONS FROM THE PROMPT
+--------------------------------------------------------------------------------
+
+Q1.  Is LNS2 input compatible with current LaCAM0 map/scen generation?
+     YES. Both use identical MovingAI .map and .scen formats.
+     generate_map() and generate_scen() are fully reusable.
+
+Q2.  Does LNS2 output need a new parser?
+     YES. LaCAM0 output is timestep-indexed; LNS2 is agent-indexed.
+     A new _parse_lns2_paths() is required. They cannot share a parser.
+
+Q3.  Does LNS2 return a full global MAPF solution for all active agents?
+     YES. --outputPaths gives one trajectory per agent covering all timesteps.
+     This is a complete, collision-free solution (same as LaCAM0).
+
+Q4.  How should LNS2 be called from the backend?
+     Via LNS2BatchPlanner.plan() → LNS2Solver.solve() → subprocess lns.exe.
+     The simulation core calls batch_planner.plan() uniformly.
+
+Q5.  Where should the LNS2 exe path be configured?
+     In lns2_wrapper.py as a default:
+       exe: str = str(Path(__file__).resolve().parent / "build" / "lns.exe")
+     (Same pattern as lacam_wrapper.py for main.exe.)
+
+Q6.  What files should be added?
+     See Section 6 above (4 new files).
+
+Q7.  What files should be modified?
+     See Section 7 above (2 files: simulation_router.py, SimulationConfig.tsx).
+
+Q8.  Which existing LaCAM0 components can be safely reused?
+     lacam0_map_generator.py, lacam0_scen_generator.py, ghost_exit_manager.py.
+
+Q9.  Which components should remain separate?
+     All wrapper, batch planner, simulation core, and parking manager classes.
+
+Q10. What tests should be added?
+     See Section 14 (smoke test, coordinate check, batch planner tests).
+
+Q11. What risks exist compared to LaCAM0?
+     See Risk Register above. Coordinate convention is the primary risk.
+
+Q12. How should timeout handling work?
+     Always pass -t <time_limit_sec>. Default 5s. LNS2 returns best-found
+     solution at timeout rather than failing hard.
+
+Q13. How should failed/no-solution cases be handled?
+     Check paths file exists and is non-empty. Return None from plan() on failure.
+     SimulationCore then keeps existing paths (same as LaCAM0).
+
+Q14. How should ghost exits / duplicate goals be handled for LNS2?
+     Identically to LaCAM0: GhostExitManager + LNS2ParkingManager.
+     No changes to GhostExitManager needed.
+
+Q15. How should LNS2 be exposed in the UI?
+     Add { value: "lns2", label: "MAPF-LNS2" } to ALL_ALGORITHMS in
+     SimulationConfig.tsx. One line change.
+
+================================================================================
+END OF PLAN
+================================================================================

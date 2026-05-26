@@ -1,0 +1,426 @@
+Ghost Parking Spots — Full Implementation Plan
+================================================
+Generated for user review. No code has been changed yet.
+
+=======================================================================
+SECTION 1 — PROBLEM STATEMENT
+=======================================================================
+
+LaCAM0 requires every agent to have a UNIQUE goal. In the current code,
+all EXIT cars receive the nearest original exit cell as their goal
+(parking_manager.choose_exit_cell). When 2+ cars target the same exit
+cell, LaCAM0's is_valid() check fails → solver exits with code 1 →
+exception → no paths produced → simulation hangs.
+
+=======================================================================
+SECTION 2 — SOLUTION OVERVIEW
+=======================================================================
+
+Attach a "ghost box" of virtual passable cells outside the original
+parking lot for every edge that has at least one EXIT cell.
+Each exiting car is given a UNIQUE ghost cell as its LaCAM0 planner
+goal instead of the shared exit cell.
+
+The ghost cells exist only inside the LaCAM0 map/scen files.
+Car positions sent to the frontend are always in ORIGINAL world
+coordinates. A car is removed from the simulation the instant it
+steps on any original EXIT cell — it never actually moves into the
+ghost area.
+
+=======================================================================
+SECTION 3 — COORDINATE SYSTEM
+=======================================================================
+
+World coordinates  = the original parking lot grid (0-indexed, can be
+                     negative for ghost cells).
+Planner coordinates = non-negative integer coords used inside .map and
+                     .scen files sent to LaCAM0.
+
+Translation:
+  offset_x = W   if left edge has exits, else 0
+  offset_y = H   if top edge has exits,  else 0
+
+  planner_x = world_x + offset_x
+  planner_y = world_y + offset_y
+
+  world_x   = planner_x - offset_x
+  world_y   = planner_y - offset_y
+
+Ghost box sizes (world coordinates):
+  Left  edge exits → ghost box: x ∈ [-W, -1],   y ∈ [0, H-1]
+  Right edge exits → ghost box: x ∈ [W,  2W-1], y ∈ [0, H-1]
+  Top   edge exits → ghost box: x ∈ [0, W-1],   y ∈ [-H, -1]
+  Bottom edge exits→ ghost box: x ∈ [0, W-1],   y ∈ [H,  2H-1]
+
+Expanded map dimensions:
+  expanded_W = W + offset_x + (W if right exits else 0)
+  expanded_H = H + offset_y + (H if bottom exits else 0)
+
+All ghost box cells are marked '.' (passable) in the LaCAM0 map.
+Cells outside any ghost box and outside the original grid are '@' (wall).
+
+=======================================================================
+SECTION 4 — GHOST GOAL ASSIGNMENT
+=======================================================================
+
+Per edge, the ghost box contains W*H candidate goal cells.
+A flat pool (deque) is kept per edge.
+On assignment: pop one cell from the pool for the car's edge.
+On release:    return the cell to the pool.
+
+Goal assignment for EXIT cars:
+1. Determine which exit edge the car will use (nearest exit cell).
+2. Pick the nearest available exit cell on that edge (load-balanced
+   — prefer edges with fewer assigned ghost goals).
+3. Assign a ghost cell from the ghost box behind that edge.
+4. Set car.goal = ghost_cell (world coords, e.g. (-3, 5)).
+5. Set car.exit_cell = exit_cell (the real EXIT cell car passes through).
+
+If the ghost pool for an edge is exhausted, return goal=None so the
+car waits for the next replan interval (no LaCAM0 call for that car).
+
+=======================================================================
+SECTION 5 — EXIT DETECTION CHANGE
+=======================================================================
+
+Current detection in _execute_paths():
+  if next_pos == car.goal and car.intent == "EXIT": remove car
+
+New detection:
+  if car.intent == "EXIT" and next_pos in original_exit_cells: remove car
+
+This fires when the car steps ON an exit cell (before it would continue
+into the ghost box). On removal: release ghost goal + add to
+cars_pending_removal.
+
+A secondary fallback is kept: if somehow car.goal (ghost cell) is
+reached (should not happen in practice), also remove.
+
+=======================================================================
+SECTION 6 — FILES TO CREATE (NEW)
+=======================================================================
+
+--- FILE A ---
+backend/planning/ghost_exit_manager.py
+  Class: GhostExitManager
+  Constructor: __init__(self, grid_width, grid_height, exit_cells)
+  Responsibilities:
+    - Determine which edges have exits.
+    - Compute offset_x, offset_y.
+    - Compute expanded_W, expanded_H.
+    - Build ghost cell pools (deques) per edge.
+    - Expose world_to_planner(wx, wy) -> (px, py).
+    - Expose planner_to_world(px, py) -> (wx, wy).
+    - Expose is_ghost_area(planner_x, planner_y) -> bool.
+    - assign_ghost_goal(car) -> Optional[Tuple[int,int]]
+        Chooses which edge to use (nearest exit + load balance),
+        pops a ghost cell from the pool, stores car_id → ghost_cell.
+    - release_ghost_goal(car_id) -> None
+        Returns ghost cell to the correct pool.
+    - get_exit_cell_for_car(car_id) -> Optional[Tuple[int,int]]
+        Returns the original exit cell associated with the car's ghost goal.
+  Key data structures:
+    _edge_ghosts: Dict[str, deque[Tuple[int,int]]]
+        edge ∈ {"left","right","top","bottom"}
+    _edge_exit_cells: Dict[str, List[Tuple[int,int]]]
+    _assigned: Dict[int, Tuple[str, Tuple[int,int], Tuple[int,int]]]
+        car_id -> (edge, ghost_cell, exit_cell)
+  Ghost cell pool generation:
+    Left  edge: all (x, y) for x in range(-W, 0),      y in range(H)
+    Right edge: all (x, y) for x in range(W, 2*W),     y in range(H)
+    Top   edge: all (x, y) for x in range(W),           y in range(-H, 0)
+    Bottom edge:all (x, y) for x in range(W),           y in range(H, 2*H)
+    Sort each pool by distance from nearest exit cell on that edge,
+    so closer ghost cells are assigned first (shorter paths).
+
+--- FILE B ---
+backend/core/lacam0_parking_manager.py
+  Class: LaCAM0ParkingManager
+  (Separate from ParkingManager so other algorithms are unaffected)
+  Constructor: __init__(self, grid, parking_cells, exit_cells, entry_cells,
+                        ghost_exit_manager: GhostExitManager)
+  Delegates all PARK-related operations to an internal ParkingManager.
+  Overrides assign_goal():
+    - "PARK" intent → delegate to base ParkingManager.choose_free_parking_spot()
+    - "EXIT" intent → call ghost_exit_manager.assign_ghost_goal(car)
+        returns ghost cell (world coords) or None if pool empty.
+  Exposes same attributes as ParkingManager for compatibility:
+    .free_spots, .assigned_spots, .occupied_spots, .parking_cells,
+    .exit_cells, .entry_cells, .next_car_id
+    (by direct delegation to base manager)
+  Exposes same methods:
+    .create_active_car(), .create_parked_car()
+    .mark_occupied(), .release_assigned_spot()
+    .mark_assigned()
+  Additional attribute:
+    .ghost_exit_manager — reference to GhostExitManager
+
+=======================================================================
+SECTION 7 — FILES TO MODIFY
+=======================================================================
+
+--- FILE C ---
+backend/planning/lacam0_map_generator.py
+  Function: generate_map(grid, parked_cells, ghost_exit_manager=None)
+  If ghost_exit_manager is None → behaviour unchanged (original grid only).
+  If ghost_exit_manager is provided:
+    - Use expanded_W, expanded_H for map header dimensions.
+    - Iterate over planner (px, py) in range(expanded_H) x range(expanded_W).
+    - Convert to world coords (wx, wy) = planner_to_world(px, py).
+    - If (wx, wy) is inside original grid: use existing cell type logic.
+    - If (wx, wy) is inside a ghost area (is_ghost_area returns True): '.'
+    - Otherwise: '@' (unreachable corner areas between ghost boxes).
+
+--- FILE D ---
+backend/planning/lacam0_scen_generator.py
+  Function: generate_scen(active_cars, map_path, grid_width, grid_height,
+                          world_to_planner=None)
+  If world_to_planner is None → identity (no translation).
+  Apply world_to_planner to (car.current_position) and (car.goal)
+  before writing each scen line.
+  grid_width / grid_height passed in = expanded dimensions.
+
+--- FILE E ---
+backend/planning/lacam0_batch_planner.py
+  Class: LaCAM0BatchPlanner
+  plan() signature change:
+    plan(self, active_cars, grid, parked_cells, current_time,
+         ghost_exit_manager=None)
+
+  Step 1 — generate_map:
+    Pass ghost_exit_manager to generate_map().
+
+  Step 2 — pre-validation:
+    Translate car world coords to planner coords before calling _cell_char().
+    For ghost cells (outside original grid bounds), skip grid.get_cell() call
+    and report s_type / g_type as "GHOST".
+    A ghost cell that maps to '.' in the expanded map is VALID.
+
+  Step 3 — generate_scen:
+    Pass expanded dimensions (ghost_exit_manager.expanded_W / expanded_H
+    if available, else grid.width / grid.height) and world_to_planner.
+
+  Step 4 — parse output:
+    After result.solution is obtained, reverse-translate each (px, py)
+    in the path back to world coords using planner_to_world().
+    This ensures all positions stored in car_path are world coords.
+    Cars are then removed at original exit cells (world coords) by the core.
+
+  Printing: update the header print to show expanded dimensions when ghost
+  extension is active.
+
+--- FILE F ---
+backend/core/lacam0_simulation_core.py
+  Constructor:
+    Accept ghost_exit_manager: Optional[GhostExitManager] = None
+    Store as self.ghost_exit_manager.
+    Store self.original_exit_cells = set(parking_manager.exit_cells)
+
+  _trigger_replan_if_needed():
+    Pass ghost_exit_manager to self.batch_planner.plan():
+      paths = self.batch_planner.plan(
+          plannable, self.grid, parked_cells, self.time,
+          ghost_exit_manager=self.ghost_exit_manager
+      )
+
+  _execute_paths():
+    Replace goal-arrival exit detection with:
+      if car.intent == "EXIT" and next_pos in self.original_exit_cells:
+          → call self._handle_car_exit(car_id, car)
+          → continue
+    Keep secondary fallback:
+      elif next_pos == car.goal and car.intent == "EXIT":
+          → call self._handle_car_exit(car_id, car)
+
+    Extract helper _handle_car_exit(car_id, car):
+      - increment metrics
+      - add to exited_car_ids / cars_pending_removal
+      - del from active_cars
+      - if ghost_exit_manager: release_ghost_goal(car_id)
+      - needs_replan = True
+
+    Existing PARK handling is unchanged.
+
+--- FILE G ---
+backend/simulation_api/simulation_router.py
+  In simulation_factory() for algorithm == "lacam0":
+    1. Import GhostExitManager and LaCAM0ParkingManager.
+    2. Build ghost_exit_manager = GhostExitManager(grid.width, grid.height, exit_cells).
+    3. Replace ParkingManager with LaCAM0ParkingManager(..., ghost_exit_manager).
+    4. Pass ghost_exit_manager to LaCAM0SimulationCore constructor.
+
+  The /run endpoint (batch, non-live) does NOT use LaCAM0 so no changes there.
+
+=======================================================================
+SECTION 8 — FRONTEND — NO CHANGES REQUIRED
+=======================================================================
+
+Reason:
+  - INIT message sends grid_data = grid_to_json_dict(grid) = original grid.
+    Ghost boxes are NOT part of the Grid object and never appear in grid.cells.
+  - STEP message sends car_positions from sim.get_positions_snapshot().
+    Car positions are always in world coords, always within original bounds,
+    because cars are removed exactly when they step on an original exit cell.
+  - Cars at exit cells (last visible position before removal) are valid world
+    coords within the original grid → rendered correctly by Simulation3D.tsx.
+  - Ghost cells, ghost goals, and planner coordinates never reach the frontend.
+
+=======================================================================
+SECTION 9 — COMPLETE CALL FLOW (ONE REPLAN CYCLE)
+=======================================================================
+
+1. Car wakes up (EXIT intent).
+2. LaCAM0ParkingManager.assign_goal(car):
+     ghost_exit_manager.assign_ghost_goal(car)
+     → selects edge (nearest + load-balanced)
+     → pops ghost_cell from edge pool
+     → records car_id -> (edge, ghost_cell, exit_cell)
+     → car.goal = ghost_cell (world coords, e.g. (-2, 5))
+3. _trigger_replan_if_needed() calls batch_planner.plan(... ghost_exit_manager).
+4. generate_map() builds expanded .map with ghost boxes.
+5. Validation: car.goal (-2, 5) → planner (W-2, 5) → '.' ✓
+6. generate_scen() writes planner-coord scen lines.
+7. LaCAM0 exe solves → output paths in planner coords.
+8. Paths are reverse-translated to world coords.
+9. car.path = [(15,7,t0), (14,7,t1), ..., (0,5,t_k), (-1,5,t_k+1), (-2,5,t_k+2)]
+   (positions after exit cell are ghost cells — never actually rendered)
+10. _execute_paths() advances car step by step.
+11. When car reaches (0, 5) ∈ original_exit_cells:
+      → _handle_car_exit(car_id, car)
+      → ghost_exit_manager.release_ghost_goal(car_id)  ← pool gets (-2,5) back
+      → car_positions[car_id] = (0, 5) until _cleanup_exited_cars fires
+      → Frontend receives (0, 5) = valid visible exit cell. Car disappears next step.
+12. Next step: _cleanup_exited_cars removes car_id from car_positions.
+
+=======================================================================
+SECTION 10 — ANSWERS TO KEY QUESTIONS FROM PLAN DOCUMENT
+=======================================================================
+
+Q1. Which files build the LaCAM0 map/scenario input?
+    lacam0_map_generator.py and lacam0_scen_generator.py (called by batch_planner).
+
+Q2. Best place to normalize coordinates for LaCAM0?
+    In GhostExitManager.world_to_planner() / planner_to_world().
+    Applied in lacam0_scen_generator and lacam0_batch_planner (path parsing).
+
+Q3. Where should world↔planner mappings live?
+    Entirely in GhostExitManager (backend/planning/ghost_exit_manager.py).
+
+Q4. Where should ghost goals be assigned?
+    LaCAM0ParkingManager.assign_goal() delegates EXIT intent to
+    ghost_exit_manager.assign_ghost_goal().
+
+Q5. How to ensure no two EXIT cars share the same ghost goal?
+    Pool is a deque; each pop() gives a unique cell. Car is only in pool
+    when it is released. A car that hasn't exited holds its ghost cell
+    exclusively until _handle_car_exit fires.
+
+Q6. How to release ghost goals when cars exit?
+    _handle_car_exit() calls ghost_exit_manager.release_ghost_goal(car_id),
+    returning the cell to the pool.
+
+Q7. How to improve choose_exit_cell to avoid congestion?
+    assign_ghost_goal() selects the edge with the fewest currently assigned
+    ghost goals (load balancing), breaking ties by Manhattan distance.
+    This naturally spreads exit traffic across edges with available ghost goals.
+
+Q8. What frontend response fields stay unchanged?
+    "grid" in INIT (original grid, no ghost cells).
+    "cars" in STEP (world coords, always within original bounds).
+    "width" / "height" in grid (original dimensions).
+    No new fields are added; no existing fields change format.
+
+Q9. Tests to add?
+    See Section 11.
+
+=======================================================================
+SECTION 11 — TESTING PLAN
+=======================================================================
+
+All tests are unit tests in backend/tests/ or can be run manually.
+
+Test T1: GhostExitManager pool management
+  - Create 10x10 grid with 1 left-edge exit at (0, 5).
+  - Assert offset_x=10, offset_y=0, expanded_W=20, expanded_H=10.
+  - Assert is_ghost_area(planner_x=5, planner_y=5) → True (world -5, 5 = left ghost).
+  - Assign 3 ghost goals → 3 different world coords with x < 0.
+  - Release 1 → pool size increases.
+  - Assign again → same cell returned.
+
+Test T2: No duplicate goals in scen
+  - 2 EXIT cars, 1 exit cell (0, 5).
+  - Call batch_planner.plan() with ghost_exit_manager.
+  - Parse .scen content: verify goal lines are different.
+
+Test T3: Map expansion with left+right exits
+  - 10x10 grid, exits on left and right edges.
+  - expanded_W = 30, expanded_H = 10, offset_x = 10.
+  - Map content: middle 10 columns = original grid, flanks = all '.'.
+
+Test T4: Coordinate round-trip
+  - For all (wx, wy) in original grid: assert planner_to_world(world_to_planner(wx,wy)) == (wx,wy).
+  - For ghost cells: same round-trip check.
+
+Test T5: Car removed at exit cell (not ghost goal)
+  - Run simulation with 1 EXIT car targeting ghost cell (-3, 5).
+  - Simulate until car reaches (0, 5).
+  - Assert car_id ∈ exited_car_ids after that step.
+  - Assert car_id NOT in car_positions two steps later.
+  - Assert ghost goal (-3, 5) returned to pool.
+
+Test T6: Ghost goal exhaustion / queue
+  - Ghost pool for left edge = 10*10 = 100 cells.
+  - Create 101 EXIT cars simultaneously.
+  - 100 get ghost goals, 1 gets goal=None, waits.
+  - After 1 car exits, pool regains 1 cell, waiting car gets a goal next replan.
+
+Test T7: Frontend receives only original coordinates
+  - Run simulation and collect all STEP messages.
+  - Assert all car x ∈ [0, W-1] and y ∈ [0, H-1] in every step.
+
+Test T8: Multiple exit edges don't intersect ghost boxes
+  - 10x10 grid with exits on all 4 edges.
+  - expanded_W = 30, expanded_H = 30, offset_x = 10, offset_y = 10.
+  - Verify ghost boxes for left, right, top, bottom don't overlap in planner space.
+
+=======================================================================
+SECTION 12 — IMPLEMENTATION ORDER
+=======================================================================
+
+Step 1: Create backend/planning/ghost_exit_manager.py
+Step 2: Create backend/core/lacam0_parking_manager.py
+Step 3: Modify backend/planning/lacam0_map_generator.py
+Step 4: Modify backend/planning/lacam0_scen_generator.py
+Step 5: Modify backend/planning/lacam0_batch_planner.py
+Step 6: Modify backend/core/lacam0_simulation_core.py
+Step 7: Modify backend/simulation_api/simulation_router.py
+Step 8: Run tests T1–T8
+
+=======================================================================
+SECTION 13 — EDGE CASES & NOTES
+=======================================================================
+
+- If there are NO exit cells at all: GhostExitManager builds no ghost boxes,
+  returns goal=None for EXIT cars, simulation handles gracefully (unchanged).
+
+- If exit_cells are on corners (e.g., (0,0)): the cell belongs to both left
+  and top edges. Assign it to whichever edge pool has more capacity.
+
+- Ghost box corner regions (e.g., x < 0 AND y < 0 when both left and top
+  ghost boxes exist): these "corner ghost boxes" are marked '@' (wall).
+  They are unreachable and serve as padding only.
+
+- The batch_planner's pre-validation already checks car.goal against the
+  map. After this change, ghost goals will correctly appear as '.' in the
+  expanded map and pass validation.
+
+- lacam0_parking_manager.py is LaCAM0-specific. The existing ParkingManager
+  is untouched and continues to be used by SimulationCore (priority planner).
+
+- The Car class (agents/car.py) requires no changes. We store the ghost
+  cell in car.goal and the exit tracking is done in the simulation core
+  via original_exit_cells check.
+
+=======================================================================
+END OF PLAN
+=======================================================================

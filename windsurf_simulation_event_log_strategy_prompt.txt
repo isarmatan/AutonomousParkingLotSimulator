@@ -1,0 +1,111 @@
+Context:
+I would like you to create a strategy for adding a simulation event log to the project.
+
+Important:
+Do NOT implement anything yet.
+First, analyze the current project flow and propose a clean strategy/design.
+After I review and approve the strategy, you can start implementing it.
+
+Current situation:
+The project has a 2D and 3D simulation.
+This request is mainly about adding a visible log to the simulation UI, most likely as a scrollable chat-style panel.
+
+Goal:
+Add a simulation log that displays important car lifecycle and intent-change events in a clear, readable way.
+
+Events that should be logged:
+1. "{car_id} has entered the lot"
+2. "{car_id} has exited the lot"
+3. "{car_id} has changed its intent from parking to exiting"
+4. "{car_id} has changed its intent from exiting to parking"
+
+What I need you to do first:
+Please scan the current project and understand:
+- Where cars are created/introduced into the simulation.
+- Where cars are removed/exited from the simulation.
+- Where car intent/state is stored.
+- Where intent changes happen.
+- How the frontend receives simulation updates.
+- Where the 2D simulation UI is rendered.
+- Whether the 3D simulation should also display the log, or whether the log should initially be limited to the 2D simulation.
+
+Please propose a strategy that includes:
+
+1. Backend event detection
+Explain where the log events should be generated.
+Possible options:
+- Generate events directly in the simulation core.
+- Generate events in the parking manager.
+- Generate events in the API/serialization layer.
+- Generate events in the frontend by comparing state changes between timesteps.
+
+Please compare these options and recommend the safest one.
+
+2. Event data structure
+Propose a clean structure for each log event, for example:
+{
+  "step": 15,
+  "timestamp": "...",
+  "car_id": "car_7",
+  "event_type": "entered_lot",
+  "message": "car_7 has entered the lot"
+}
+
+The structure should be simple, frontend-friendly, and future-proof enough to support more event types later.
+
+3. Frontend display strategy
+Propose how to display the log in the UI:
+- A scrollable chat-style panel.
+- Possibly placed beside the 2D simulation, under it, or as a collapsible panel.
+- It should not break the current 2D layout.
+- It should not cover the simulation in a way that makes it hard to use.
+- It should support many log entries without hurting performance.
+
+4. Scroll behavior
+Please consider:
+- Auto-scroll to the newest event.
+- Optional ability to pause auto-scroll if the user manually scrolls upward.
+- Keeping the latest events visible.
+- Handling long simulations with many events.
+
+5. Performance considerations
+The log should not significantly slow down the simulation.
+Please think about:
+- Limiting rendered log entries, for example only the latest 200-500.
+- Avoiding unnecessary React re-renders.
+- Storing events efficiently.
+- Whether logs should be streamed live or included in timestep simulation JSON.
+
+6. Compatibility with current simulation modes
+Please check how this fits with:
+- Current 2D simulation playback.
+- 3D simulation, if relevant.
+- Lifelong simulation flow.
+- Existing JSON simulation result structure.
+- Any WebSocket/live update flow if it exists.
+
+7. Recommended implementation plan
+Please propose a step-by-step plan, but do not implement it yet.
+The plan should include:
+- Files/components that will likely need changes.
+- Backend changes, if needed.
+- Frontend changes, if needed.
+- How to test it.
+- Risks or edge cases.
+
+8. Edge cases to consider
+Please include how the design handles:
+- Same car entering and exiting multiple times.
+- Car intent changing multiple times.
+- A car being removed unexpectedly.
+- Simulation reset/restart.
+- Loading an old simulation result that has no log events.
+- Very large number of cars/events.
+
+Main requirement:
+Do not start coding yet.
+Only create the strategy/design document for review.
+Wait for my approval before implementation.
+
+Preferred outcome:
+A clean, minimal, safe approach that adds a useful scrollable simulation event log without making major risky changes to the existing simulation logic.

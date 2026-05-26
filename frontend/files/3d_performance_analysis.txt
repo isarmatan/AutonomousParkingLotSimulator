@@ -1,0 +1,32 @@
+3D Simulation Performance Analysis
+
+The "choppiness" and "skipping" you are experiencing are primarily due to how the simulation state is updated and rendered. It is not a GPU performance issue (polygons/textures), but an animation architecture issue.
+
+1. Discrete Step Updates (The "Jerky" Motion)
+---------------------------------------------
+The simulation runs on a discrete clock where `stepIndex` increases by 1 every 100ms (10 frames per second).
+- Current Behavior: At t=0ms, car is at X=0. At t=100ms, car teleports to X=1.
+- Visual Result: Cars appear to "jump" or teleport from cell to cell rather than driving smoothly. This 10Hz update rate looks inherently choppy compared to a standard 60Hz or 144Hz screen refresh rate.
+
+2. React State Driver vs. Game Loop
+-----------------------------------
+The playback loop is driven by a `setInterval` in `Simulation.tsx` that triggers a React State update (`setStepIndex`) every 100ms.
+- Issue: React state updates trigger a full React Component re-render cycle. If the browser is busy or the render takes slightly too long, the `setInterval` timing becomes inconsistent.
+- "Skipping" Steps: If a re-render takes longer than 100ms (or if multiple state updates queue up), the browser may drop a frame or execute two updates in rapid succession, causing the visual "skip" you noticed.
+
+3. Lack of Interpolation
+------------------------
+In `Simulation3D.tsx`, the `Car` component receives exact grid coordinates (`x`, `y`) from the current timestep.
+- Current Code: `position={[x * CELL_SIZE, 0.2, y * CELL_SIZE]}`
+- Missing Logic: There is no code to calculate the "in-between" positions. For smooth movement, the car should slide from Position A to Position B over the duration of the step.
+
+4. Recommendation: Client-Side Interpolation
+--------------------------------------------
+To fix this, we need to decouple the *simulation data rate* (10Hz) from the *rendering frame rate* (60Hz+).
+
+Proposed Architecture Change:
+1. Keep the data at 10Hz (or whatever the backend provides).
+2. Instead of snapping to `timesteps[i]`, the 3D scene should accept a "progress" value (e.g., `step 10.5` means halfway between step 10 and 11).
+3. Use React Three Fiber's `useFrame` hook to smoothly interpolate position and rotation between `currentStep` and `nextStep`.
+
+This will make the cars appear to glide smoothly at 60fps, even if the data only updates 10 times a second.

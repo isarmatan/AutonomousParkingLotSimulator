@@ -1,0 +1,255 @@
+Windsurf Task: Ghost Parking Spots / Exit Handling for LaCAM0 Integration
+
+Project context
+---------------
+We are working on the Autonomous Parking Lot Simulator project.
+The system currently integrates LaCAM0 for MAPF planning.
+LaCAM0 works well when cars enter the parking lot because each entering car receives a unique parking goal.
+However, when cars exit, multiple cars may share the same logical exit goal because the parking lot has only a limited number of exit cells.
+LaCAM0 does not support duplicate goal assignment, so we need a clean modeling solution.
+
+Decision
+--------
+We decided to use ghost parking spots / ghost exit areas.
+These ghost areas are artificial cells outside the original parking lot that exist only for the planner.
+They should solve the duplicate-goal issue by giving exiting cars unique planner goals.
+
+Important: ghost cells are planner-only. They should not be displayed in the frontend.
+
+Core idea
+---------
+If the original parking lot is 10x10, and an exit cell is generated on an edge, for example at coordinate (0,5), we attach an additional ghost box outside that edge.
+
+Example:
+- Original parking lot size: 10x10
+- Exit cell is located on the left edge at (0,5)
+- Attach another 10x10 ghost box outside the left edge
+- In world/original coordinates, this attached box may start at (-10,0)
+- However, LaCAM0 may need a normalized coordinate system where the full expanded map starts from (0,0)
+
+Please verify this carefully during implementation.
+If LaCAM0 requires non-negative grid coordinates, then the expanded map must be normalized before being exported to LaCAM0.
+That means original coordinates and planner coordinates may need a translation layer.
+
+Exit cells can be generated on any edge of the original parking lot:
+- top edge
+- bottom edge
+- left edge
+- right edge
+
+For every edge that has at least one exit cell, attach a ghost box outside that edge.
+The ghost area should be shaped as a box so that ghost areas from different edges do not intersect or create strange narrow corridors.
+
+Example rule
+------------
+For an original W x H parking lot:
+
+Left edge exit exists:
+- Attach ghost box of size W x H to the left
+- Possible world coordinate range: x in [-W, -1], y in [0, H-1]
+
+Right edge exit exists:
+- Attach ghost box of size W x H to the right
+- Possible world coordinate range: x in [W, 2W-1], y in [0, H-1]
+
+Top edge exit exists:
+- Attach ghost box of size W x H above
+- Possible world coordinate range: x in [0, W-1], y in [-H, -1]
+
+Bottom edge exit exists:
+- Attach ghost box of size W x H below
+- Possible world coordinate range: x in [0, W-1], y in [H, 2H-1]
+
+Important implementation detail:
+If multiple edges have exits, the expanded planner map may have negative coordinates in world space.
+Before sending to LaCAM0, convert all world coordinates into non-negative planner coordinates.
+For example, compute min_x and min_y across the expanded map, then translate:
+
+planner_x = world_x - min_x
+planner_y = world_y - min_y
+
+The reverse mapping may be needed when converting LaCAM0 output back into simulation/world coordinates.
+
+Critical behavior requirement
+-----------------------------
+Cars should never actually reach the ghost exit cells during the real simulation.
+
+Each simulation step:
+- If a car touches/reaches an original exit cell, immediately delete/remove that car from the active simulation.
+- The ghost goal only exists to satisfy LaCAM0's unique-goal requirement.
+- The frontend should never display ghost cells, ghost parking spots, or ghost movement.
+
+Goal assignment behavior
+------------------------
+For exiting cars:
+- The logical goal is still: exit the parking lot.
+- The planner goal should be a unique ghost parking spot assigned behind the relevant original exit cell / exit edge.
+- No two active exiting cars should receive the same ghost goal.
+
+This means we need a distinction between:
+- logical_goal: the real semantic goal, for example EXIT_LEFT or EXIT_AT_(0,5)
+- planner_goal: the unique LaCAM0-compatible ghost cell
+
+Potential data shape:
+
+{
+  "car_id": 17,
+  "logical_goal": "EXIT",
+  "exit_cell": [0, 5],
+  "planner_goal": [-3, 5]
+}
+
+After coordinate normalization for LaCAM0, planner_goal may become something like [7, 5].
+
+Parking manager changes
+-----------------------
+Please review ParkingManager carefully, especially the function/logic that chooses exit cells.
+The current choose-exit-cell logic may need to change.
+
+Main concern:
+We do not want exiting cars to block other exiting cars unnecessarily.
+
+Please inspect:
+- parking_manager
+- choose_exit_cell / exit cell selection logic
+- goal assignment logic
+- any logic that assigns cars to parking spots or exits
+- any logic that decides when a car starts exiting
+
+Expected improvements to consider:
+1. Prefer exit cells based on proximity/path availability rather than random choice only.
+2. Avoid assigning too many cars to the same exit cell when other exits are available.
+3. Add load balancing between exits.
+4. Avoid choosing an exit that is already congested if another valid exit exists.
+5. Ensure every exiting car gets a unique ghost planner goal.
+6. Keep a queue if there are more exiting cars than available ghost goals.
+
+LaCAM simulation core changes
+-----------------------------
+Please scan the LaCAM-related simulation core thoroughly before implementing.
+
+Relevant areas likely include:
+- lacam simulation core
+- simulation_core step logic
+- advanced car movement logic
+- goal assignment flow
+- LaCAM input generation
+- LaCAM output parsing
+- coordinate conversion
+- map export / scenario export
+- active agent lifecycle
+- car deletion/removal logic
+
+Specific requirement:
+During each step, if a car reaches an original exit cell, remove it immediately from the simulation.
+The car should not continue into the ghost box in the frontend simulation.
+
+Frontend changes
+----------------
+The frontend should not display ghost parking spots or ghost cells.
+
+Please inspect frontend simulation rendering logic and make sure:
+- only original parking lot cells are rendered
+- ghost boxes are hidden
+- ghost goals are not shown as real parking spots
+- ghost movement outside the original map is not shown
+- removed cars disappear naturally once they reach an original exit cell
+
+Important architectural requirement
+-----------------------------------
+The backend may use an expanded planner map internally, but the frontend should still receive/display the original map dimensions and original visible cells only.
+
+Recommended implementation design
+---------------------------------
+Please think carefully before editing. I want an implementation plan first.
+
+Suggested modules/classes/functions to design:
+
+1. ExpandedMapBuilder / GhostExitAreaBuilder
+   Responsibility:
+   - Receive original parking lot dimensions and original exit cells
+   - Decide which ghost boxes are needed
+   - Generate expanded planner map
+   - Generate coordinate offset/translation
+   - Provide world_to_planner and planner_to_world conversion
+
+2. GhostGoalManager
+   Responsibility:
+   - Maintain available ghost goals per exit/edge
+   - Assign unique ghost goals to exiting cars
+   - Release ghost goals when cars are removed or no longer active
+   - Optionally queue exiting cars if needed
+
+3. ExitManager or updates inside ParkingManager
+   Responsibility:
+   - Improve choose_exit_cell behavior
+   - Avoid congestion where possible
+   - Track exit load
+   - Choose reasonable exit for each car
+
+4. SimulationCore update
+   Responsibility:
+   - Remove cars when they reach original exit cells
+   - Ensure ghost cells are not treated as visible real cells
+   - Ensure LaCAM planning receives expanded planner data, while frontend receives original map data
+
+Key questions to answer in the plan
+-----------------------------------
+1. Which files currently build the LaCAM map/scenario input?
+2. Where is the best place to normalize coordinates for LaCAM0?
+3. Where should the world-to-planner and planner-to-world mappings live?
+4. Where should ghost goals be assigned?
+5. How should we ensure no two active exiting cars get the same ghost goal?
+6. How should we release ghost goals when cars exit?
+7. How should we modify choose_exit_cell to avoid cars blocking other exiting cars?
+8. What frontend response fields need to remain unchanged so the ghost area is hidden?
+9. What tests should be added to validate this?
+
+Testing expectations
+--------------------
+Please include tests or manual validation scenarios in the implementation plan.
+
+Important scenarios:
+
+1. Single exit, multiple cars exiting
+   - All cars receive unique ghost planner goals
+   - No duplicate LaCAM goals
+   - Cars are removed once they reach the original exit cell
+   - No ghost cells appear in frontend
+
+2. Multiple exits on different edges
+   - Ghost boxes are attached correctly to each relevant edge
+   - Coordinate normalization works correctly
+   - Exiting cars are distributed reasonably between exits
+
+3. Original 10x10 parking lot with left-edge exit at (0,5)
+   - Left ghost box is attached outside the original lot
+   - Expanded planner map uses valid non-negative coordinates for LaCAM0
+   - Frontend still sees only the original 10x10 lot
+
+4. Exits on opposite edges
+   - Ghost boxes do not intersect
+   - Coordinate offset remains correct
+
+5. More exiting cars than available ghost goals
+   - Some cars wait / remain active without duplicate goals
+   - No invalid LaCAM call is made
+
+6. Car reaches original exit cell
+   - It is removed immediately
+   - Its ghost goal is released
+   - It does not continue to move into the ghost box visually
+
+Final instruction for Windsurf
+------------------------------
+Please do not immediately implement large changes.
+First scan the relevant files and produce a detailed implementation plan.
+Focus especially on:
+- lacam simulation core
+- lacam integration files
+- parking manager
+- choose exit cell logic
+- goal assignment flow
+- frontend simulation rendering contract
+
+Once I review the plan, I will approve the actual code changes.

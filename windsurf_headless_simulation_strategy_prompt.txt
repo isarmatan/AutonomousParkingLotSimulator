@@ -1,0 +1,260 @@
+Context:
+I would like you to create a strategy/design for adding a Headless Simulation mode to my Autonomous Parking Lot Simulator.
+
+Important:
+Do NOT implement anything yet.
+First, scan the project and create a strategy/design plan.
+Wait for my approval before making any code changes.
+
+Goal:
+Add an option to run a simulation without displaying the live 2D/3D simulation.
+Instead, the simulation should run in the backend/headless flow and only return/display the final statistics result.
+
+Current situation:
+- The system has 2D and 3D simulation visualization.
+- The simulation is lifelong by default.
+- The user can configure simulation settings.
+- The system already tracks statistics such as:
+  - Exit: # Exited, Avg Steps
+  - Arrivals: # Spawned, # Parked, Avg Steps
+  - Global: Time (steps), Failures
+- We are also planning/considering expanded statistics such as:
+  - Average total trip duration
+  - Longest trip duration
+  - Shortest trip duration
+  - Average planner runtime
+  - CPU usage
+  - Memory usage
+- The system supports at least two planner options:
+  - LaCAM0
+  - Priority Planner
+
+Requested feature:
+Add a Headless Mode option in the simulation configuration UI.
+
+My UI idea:
+- Add a checkbox or toggle/slide button:
+  - “Activate Headless Mode”
+  - or “Headless Simulation”
+- When Headless Mode is enabled:
+  - The simulation should NOT display live movement.
+  - The user should only receive the final statistics after the simulation finishes.
+  - A maximum step count MUST be configured by the user.
+  - This is required because the simulation is lifelong by default.
+
+Main rule:
+If Headless Mode is selected, the user must configure a maximum timestep / max steps value.
+The system should prevent starting a headless simulation without max steps.
+
+What I need you to do first:
+Please scan the project and understand:
+- Where the simulation configuration form is implemented.
+- Where max timestep / max steps is currently configured.
+- How simulation mode is selected.
+- How 2D and 3D visualization are started.
+- How the backend runs the simulation.
+- How lifelong simulation currently stops, if max steps are configured.
+- How statistics are calculated and returned.
+- How planner selection works for LaCAM0 and Priority Planner.
+- Whether there is already an API path that can support a statistics-only simulation result.
+- Whether parking_lots.db/statistics saving needs to be considered for headless runs.
+
+Please create a strategy document that covers:
+
+1. Current simulation flow
+Explain the current flow from:
+- Frontend configuration
+- Start simulation action
+- Backend simulation execution
+- Planner execution
+- Statistics calculation
+- Returning data to frontend
+- Rendering 2D/3D visualization
+
+2. Headless mode behavior
+Define exactly how Headless Mode should behave:
+- No live 2D/3D rendering.
+- Backend runs the simulation until max steps or another stopping condition.
+- Frontend shows loading/progress state while running.
+- When finished, frontend displays final statistics.
+- Optional: offer save statistics after completion.
+- Optional: redirect to Statistics page or show a results modal/page.
+
+3. Max step validation
+Design how to enforce:
+- If Headless Mode is OFF:
+  - Current behavior should remain unchanged.
+- If Headless Mode is ON:
+  - max steps is required.
+  - max steps must be a positive integer.
+  - Start button should be disabled or validation message should appear if max steps is missing.
+  - Backend should also validate this, not only frontend.
+
+Please recommend the safest validation approach.
+
+4. Frontend UI strategy
+Propose where to add the Headless Mode toggle:
+- Simulation configuration page/component
+- Near algorithm selection
+- Near max steps setting
+- Or another logical place
+
+Please include:
+- Toggle label
+- Tooltip/help text
+- Validation message wording
+- Whether max steps input should become required visually
+- Whether 2D/3D view selection should be disabled or ignored in Headless Mode
+- What the user should see while the headless run is processing
+- What the user should see after completion
+
+5. Backend/API strategy
+Please propose the best backend approach.
+
+Possible options:
+A. Reuse the existing simulation endpoint and add a headless_mode flag.
+B. Create a new dedicated endpoint for headless simulations.
+C. Add backend branching inside the current simulation service/core.
+
+Please compare these options and recommend the safest/cleanest approach.
+
+The backend should:
+- Accept headless_mode: true/false
+- Require max_steps when headless_mode is true
+- Run the selected planner correctly
+- Support both LaCAM0 and Priority Planner
+- Return final statistics only, or a small result object with metadata
+- Avoid generating/storing full frame-by-frame simulation output if it is not needed
+
+6. Statistics result structure
+Propose the response structure for a completed headless simulation.
+
+Example:
+{
+  "mode": "headless",
+  "algorithm": "lacam0",
+  "max_steps": 1000,
+  "completed_steps": 1000,
+  "stopped_reason": "max_steps_reached",
+  "statistics": {
+    "spawned": 120,
+    "parked": 80,
+    "exited": 40,
+    "failures": 0,
+    "avg_arrival_steps": 12.4,
+    "avg_exit_steps": 18.7,
+    "avg_total_trip_duration": 20.1,
+    "longest_trip_duration": 67,
+    "shortest_trip_duration": 4,
+    "avg_planner_runtime_ms": 31.2,
+    "cpu_usage_avg": 42.5,
+    "memory_usage_peak_mb": 512
+  }
+}
+
+Please adjust this based on the actual project structure.
+
+7. Performance strategy
+The purpose of headless mode is to avoid visualization overhead and get final statistics faster.
+
+Please consider:
+- Avoid returning full timestep frames to frontend.
+- Avoid storing unnecessary per-step frontend data.
+- Avoid React rendering during the run.
+- Keep only required aggregated statistics.
+- Support large simulations better than visual mode.
+- Avoid excessive memory usage.
+
+8. Planner compatibility
+Headless Mode must work with:
+- LaCAM0
+- Priority Planner
+
+Please explain:
+- Whether both planners can run without generating visual output.
+- Whether current planners are coupled to frame generation.
+- Whether a shared simulation runner abstraction is needed.
+- Whether headless mode should reuse the same simulation_core logic but with rendering/export disabled.
+- Any differences/risks between LaCAM0 and Priority Planner.
+
+9. Interaction with statistics saving
+Please consider:
+- Should headless results be automatically saved?
+- Should the user be asked to save the result?
+- Should there be a “Save Statistics” button after completion?
+- Should headless runs appear in the existing Statistics page?
+- Should parking_lots.db be updated with a new field like mode = "headless"?
+- How to avoid duplicate saved runs?
+
+Do not implement this yet, just recommend a strategy.
+
+10. Progress and user feedback
+Since headless mode may take time, propose what the user sees while waiting:
+- Loading spinner
+- Progress bar if possible
+- Current step if backend supports progress
+- Simple “Running headless simulation...” message if progress is not easy
+- Cancel button if simple/safe, otherwise mention it as future improvement
+
+Please recommend the simplest safe approach first.
+
+11. Edge cases
+Please include how the plan handles:
+- Headless mode selected but max steps missing
+- max steps = 0 or negative
+- Very large max steps
+- Planner failure
+- LaCAM0 timeout or executable error
+- Priority Planner failure
+- Simulation produces no completed cars
+- User clicks start multiple times
+- User navigates away during a headless run
+- Backend timeout
+- Old configs that do not include headless_mode
+- Statistics page receiving results from visual and headless runs
+
+12. Recommended implementation plan
+Please provide a phased implementation plan, but do not code yet.
+
+Suggested phases:
+Phase 1:
+- Inspect current config UI, backend request model, simulation runner, and statistics flow.
+
+Phase 2:
+- Add design for frontend headless toggle and max steps validation.
+
+Phase 3:
+- Add backend request validation and headless execution path.
+
+Phase 4:
+- Ensure both LaCAM0 and Priority Planner support statistics-only execution.
+
+Phase 5:
+- Add final result display in frontend.
+
+Phase 6:
+- Integrate optional statistics saving / Statistics page compatibility.
+
+Phase 7:
+- Testing.
+
+13. Testing strategy
+Please propose tests for:
+- Headless mode disabled: existing visual behavior unchanged.
+- Headless mode enabled without max steps: blocked with validation.
+- Headless mode enabled with valid max steps: returns final statistics.
+- LaCAM0 headless run.
+- Priority Planner headless run.
+- Max steps stop condition.
+- Planner failure handling.
+- Statistics result correctness.
+- Statistics saving, if included.
+- Performance/memory behavior compared to visual simulation.
+
+Main requirement:
+Do not implement anything yet.
+Only create the strategy/design document for review.
+Wait for my approval before implementation.
+
+Preferred outcome:
+A safe, minimal, maintainable Headless Simulation mode that requires max steps, skips live visualization, supports both LaCAM0 and Priority Planner, and returns final statistics cleanly without risky changes to the existing simulation logic.

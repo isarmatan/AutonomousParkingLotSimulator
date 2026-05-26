@@ -1,0 +1,21 @@
+Frontend Performance Analysis & Recommendations for Stats Page
+
+1. **Large List Rendering (Critical)**
+   - **Issue:** The table renders all simulation history items at once (`filtered.map(...)`). If you have hundreds or thousands of records, this creates a massive number of DOM nodes, causing significant lag when scrolling or updating the search.
+   - **Recommendation:** Implement **Virtualization** (using libraries like `react-window` or `react-virtuoso`) to only render the rows currently visible on screen. Alternatively, implement **Pagination** to show only 10-20 items per page.
+
+2. **Search Input Optimization**
+   - **Issue:** The search filter runs on every single keystroke (`onChange={(e) => setQuery(e.target.value)}`). With a large dataset, this recalculates the `filtered` list and re-renders the entire table immediately, making typing feel sluggish.
+   - **Recommendation:** **Debounce** the search input. Update the filter query only after the user stops typing for 300-500ms.
+
+3. **Data Fetching Strategy**
+   - **Issue:** The component fetches the entire history payload (`/simulation/history`) on mount. As the database grows, this request will take longer and consume more memory.
+   - **Recommendation:** While this often requires backend changes, on the frontend you can implement **Infinite Scroll** or **Pagination** if the API supports it. If stuck with the current API, ensure the server response is at least not blocking the UI (which it currently isn't, but processing a large JSON blob can still block the main thread).
+
+4. **Object Creation in Render Loop**
+   - **Issue:** `formatDate` creates a new `Date` object and runs `toLocaleString` for every row on every render.
+   - **Recommendation:** Use a lightweight date library (like `date-fns`) or memoize the formatted dates if the list is static. However, virtualization (#1) usually solves the performance impact of this by simply calling it fewer times.
+
+5. **Heavy Component Structure**
+   - **Issue:** The `Stats` component is monolithic. Any state change (like typing in the search box) triggers a re-render of the entire component, including the KPI cards and the header.
+   - **Recommendation:** Split the table into a separate memoized component (`<StatsTable items={filtered} ... />`). This ensures that updates to unrelated state don't cause unnecessary re-renders of the heavy table structure, although the `query` update acts on the table directly, so this is less critical than #1.

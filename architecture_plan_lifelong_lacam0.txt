@@ -1,0 +1,835 @@
+================================================================================
+  ARCHITECTURE PLAN: Lifelong Simulation + LaCAM0 Integration
+  Autonomous Parking Lot Simulator
+  Date: May 2026
+================================================================================
+
+
+────────────────────────────────────────────────────────────────────────────────
+1. CURRENT FLOW SUMMARY (based on actual code)
+────────────────────────────────────────────────────────────────────────────────
+
+Frontend flow:
+  - SimulationConfig.tsx: User fills in parameters, saves to sessionStorage.
+  - Layout page: User picks a saved/generated parking lot layout.
+  - Simulation.tsx: On mount, reads config + layout from sessionStorage.
+    Sends a single HTTP POST to /simulation/run with the full config payload.
+    Waits for the response. Receives a big JSON (grid + all timesteps + meta).
+    Plays back the pre-calculated animation locally using requestAnimationFrame.
+
+Backend flow:
+  - simulation_router.py: POST /simulation/run handler.
+    Builds Grid (generated or loaded from DB).
+    Instantiates ParkingManager, ReservationTable, PriorityPlanner, SimulationConfig.
+    Instantiates SimulationCore with all components.
+    Runs a blocking loop: for _ in range(max_steps): simulation.step(); capture_step()
+    Terminates when all cars are done OR max_steps is reached.
+    Returns the full SimulationResponse JSON (grid + list of TimestepDTOs + meta).
+
+Planner:
+  - PriorityPlanner calls single_agent_a_star() for each car individually.
+  - ReservationTable maintains space-time reservations.
+  - No MAPF solver. Each car is planned independently with priority ordering.
+
+Key observations:
+  - The simulation is entirely offline. Nothing is live/streamed.
+  - The frontend is just a playback viewer of a pre-computed result.
+  - max_steps is a hard cap. If not all tasks finish, status = MAX_STEPS_REACHED.
+  - arrival_lambda controls Poisson arrivals. initial_active_exit_rate controls
+    how fast parked cars wake up and start exiting.
+  - SimulationCore is responsible for the loop, car lifecycle, and calling the planner.
+  - ParkingManager handles spot assignment, car creation, and spot tracking.
+  - The algorithm selector in SimulationConfig.tsx has "Priority planning" hardcoded
+    and only one option. It is currently not sent to the backend.
+
+
+────────────────────────────────────────────────────────────────────────────────
+2. LACAM0 FILE FORMAT (from understand lacam0/ folder)
+────────────────────────────────────────────────────────────────────────────────
+
+.map format:
+  Line 1: "type octile"
+  Line 2: "height H"
+  Line 3: "width W"
+  Line 4: "map"
+  Lines 5..5+H: grid rows, W characters each
+    '.' = free (drivable) cell
+    '@' = obstacle (wall, blocked)
+
+  Example header:
+    type octile
+    height 32
+    width 32
+    map
+    .......@.........@@.......@.....
+    ...
+
+.scen format:
+  Line 1: "version 1"
+  Each subsequent line: one agent.
+    Format: bucket  map_file  map_width  map_height  start_x  start_y  goal_x  goal_y  optimal_length
+    Example: 3  random-32-32-10.map  32  32  11  6  7  18  13.65685425
+    - bucket: arbitrary integer (used for benchmark grouping, can use 0)
+    - start_x, start_y: agent start column/row (0-indexed, x=col, y=row)
+    - goal_x, goal_y: agent goal column/row
+    - optimal_length: can be set to 0.0 (LaCAM0 ignores it)
+
+  Command: ./build/main -i scenario.scen -m map.map -N 3 -v 3
+    -N = number of agents to use from the scen file (top N lines after header)
+    -v = verbosity level
+
+result.txt format:
+  agents=3
+  map_file=random-32-32-10.map
+  solver=planner
+  solved=1
+  soc=76              (sum of costs)
+  makespan=35         (total timesteps until all agents reach goal)
+  ...
+  starts=(11,6),(29,9),(9,0),
+  goals=(7,18),(1,16),(13,21),
+  solution=
+  0:(11,6),(29,9),(9,0),       <- timestep 0: position of agent 0, agent 1, agent 2
+  1:(11,7),(29,10),(10,0),     <- timestep 1
+  ...
+  35:(7,18),(1,16),(13,21),    <- final timestep
+
+  Coordinate system: (x, y) = (column, row), 0-indexed.
+  Agents remain at their goal position after reaching it (listed but not moving).
+
+
+────────────────────────────────────────────────────────────────────────────────
+3. PROPOSED NEW FLOW
+────────────────────────────────────────────────────────────────────────────────
+
+Step 1: Frontend sends initial config via HTTP POST to /simulation/start
+  Returns: { session_id, grid }
+
+Step 2: Frontend opens WebSocket connection to ws://localhost:8000/simulation/ws/{session_id}
+
+Step 3: Backend sends INIT message (grid data, initial config echo)
+
+Step 4: Backend starts simulation loop as an asyncio Task
+
+Step 5: Each timestep:
+  - Advance cars along paths
+  - Spawn new cars based on arrival_lambda (Poisson)
+  - Wake up parked cars based on exit_rate
+  - Call PlannerManager if replanning is needed
+  - Send STEP message over WebSocket to frontend
+  - asyncio.sleep(step_delay_ms / 1000) to yield and control speed
+
+Step 6: Frontend renders each STEP message live (no pre-computed buffer)
+
+Step 7: Simulation continues until:
+  - max_timesteps reached (if configured)
+  - User sends STOP message via WebSocket
+  - WebSocket disconnects
+
+Control messages:
+  Frontend → Backend: PAUSE, RESUME, STOP, RESET
+  Backend → Frontend: STEP, INIT, STATUS, ERROR
+
+
+────────────────────────────────────────────────────────────────────────────────
+4. FRONTEND/BACKEND COMMUNICATION STRATEGY
+────────────────────────────────────────────────────────────────────────────────
+
+Recommendation: WebSocket (primary) + REST (initialization only)
+
+Rationale:
+  - Backend needs to continuously push timestep updates → WebSocket push is ideal.
+  - Frontend needs to send control commands (pause/resume/stop/reset) → requires
+    a channel FROM frontend TO backend. SSE is one-way, so it would need a
+    separate REST endpoint for controls, which is messy. WebSocket is naturally
+    bidirectional.
+  - Polling is unsuitable: too much latency, too much wasted bandwidth.
+
+Why not pure SSE + REST:
+  - SSE is simpler to set up than WebSocket but requires two separate connections
+    (SSE stream for backend→frontend, REST calls for frontend→backend).
+  - This split makes it harder to guarantee ordering and state consistency.
+  - FastAPI supports WebSocket natively (via Starlette), so the overhead is minimal.
+
+Chosen protocol:
+
+  REST endpoints:
+    POST /simulation/start
+      Body: LiveSimulationRequest (config + layout info)
+      Response: { session_id: string, grid: GridData }
+
+    DELETE /simulation/{session_id}
+      Terminates and removes session server-side.
+
+  WebSocket endpoint:
+    GET /simulation/ws/{session_id}
+      (Upgrades to WebSocket)
+
+  Backend → Frontend messages (JSON):
+    { "type": "INIT",   "grid": {...}, "config": {...} }
+    { "type": "STEP",   "t": 42, "cars": {"1": [x,y], ...}, "stats": {...}, "active_count": 5 }
+    { "type": "STATUS", "status": "PAUSED" | "RUNNING" | "STOPPED" | "COMPLETED" }
+    { "type": "ERROR",  "message": "..." }
+
+  Frontend → Backend messages (JSON):
+    { "type": "PAUSE" }
+    { "type": "RESUME" }
+    { "type": "STOP" }
+    { "type": "RESET" }    <- re-runs same config from t=0
+
+How to handle:
+  - Initial config: sent via POST /simulation/start (not over WebSocket)
+  - Live timestep updates: every STEP message (or batch every N steps, configurable)
+  - Batching: backend should send 1 step per message by default; batching optional
+    optimization later. 1:1 is easier to reason about and debug.
+  - Frontend storage: only current + previous N timesteps in memory (circular buffer)
+    for a "scrubbing trail". Not the full history.
+  - Errors: backend sends ERROR message, frontend shows error overlay. WS stays open.
+  - Long-running: no timeout on WS. If user closes tab, backend detects disconnect
+    and stops the simulation task.
+  - Optional max_timesteps: backend checks time >= max_timesteps and sends
+    STATUS COMPLETED, then closes the loop.
+  - Manual stop: frontend sends STOP, backend sets a stop flag, loop exits next step,
+    sends STATUS STOPPED.
+  - Pause/resume: backend pauses the asyncio.sleep loop (checks a pause event).
+
+
+────────────────────────────────────────────────────────────────────────────────
+5. BACKEND CHANGES — FILES TO MODIFY
+────────────────────────────────────────────────────────────────────────────────
+
+(A) backend/api_app.py
+  - Register the new WebSocket router.
+  - Import and include ws_router.
+  - Consider adding lifespan context manager instead of deprecated on_event("startup").
+
+(B) backend/simulation_api/simulation_router.py
+  - Add POST /simulation/start endpoint (creates session, returns session_id + grid).
+  - Add DELETE /simulation/{session_id} endpoint.
+  - Keep existing POST /simulation/run for backwards compatibility (optional).
+  - Remove the blocking loop from /run once new flow is stable.
+
+(C) backend/simulation_api/simulation_dtos.py
+  - Add LiveSimulationRequest DTO (like SimulationRequest but with optional
+    max_timesteps, step_delay_ms, algorithm choice).
+  - Add WebSocket message DTOs:
+      StepMessage, InitMessage, StatusMessage, ErrorMessage (Backend→Frontend)
+      ControlMessage (Frontend→Backend)
+  - Add SessionInitResponse { session_id, grid }.
+
+(D) backend/core/simulation_core.py
+  - Change SimulationConfig to add:
+      max_timesteps: Optional[int] = None    (None = run forever)
+      step_delay_ms: int = 100               (ms between steps)
+  - Decouple from PriorityPlanner: change constructor to accept BasePlanner
+    (interface) instead of PriorityPlanner directly.
+  - No other major logic changes needed — SimulationCore's step() method stays.
+
+
+────────────────────────────────────────────────────────────────────────────────
+6. BACKEND CHANGES — NEW FILES TO CREATE
+────────────────────────────────────────────────────────────────────────────────
+
+(A) backend/simulation_api/simulation_session.py
+  Purpose: Manages a single live simulation instance.
+  Key responsibilities:
+    - Hold SimulationCore, WebSocket reference, status flag.
+    - Run the simulation loop as an asyncio Task (async def _run_loop).
+    - Each iteration: call simulation.step(), serialize snapshot, send STEP message.
+    - Use asyncio.Event for pause/resume.
+    - Check stop flag or max_timesteps for termination.
+    - On WS disconnect: stop the loop gracefully.
+  Key attributes:
+    session_id: str
+    simulation: SimulationCore
+    websocket: WebSocket
+    status: Literal["RUNNING", "PAUSED", "STOPPED", "COMPLETED", "ERROR"]
+    _stop_event: asyncio.Event
+    _pause_event: asyncio.Event
+    _task: asyncio.Task
+
+(B) backend/simulation_api/simulation_manager.py
+  Purpose: Registry of active sessions.
+  Key responsibilities:
+    - sessions: Dict[str, SimulationSession]
+    - create_session(config, websocket) -> SimulationSession
+    - get_session(session_id) -> Optional[SimulationSession]
+    - remove_session(session_id)
+  Notes:
+    - Should be a singleton or FastAPI dependency (e.g. a module-level dict).
+    - Needs to clean up sessions when they finish or disconnect.
+
+(C) backend/simulation_api/ws_router.py
+  Purpose: WebSocket endpoint.
+  Key responsibilities:
+    - WebSocket route: /simulation/ws/{session_id}
+    - On connect: look up session in manager, attach websocket.
+    - Receive loop: parse control messages (PAUSE/RESUME/STOP/RESET), call
+      session.handle_control(msg).
+    - On disconnect: call session.stop().
+
+(D) backend/planning/planner_interface.py
+  Purpose: Abstract base class for all planners.
+  Interface:
+    class BasePlanner(ABC):
+      @abstractmethod
+      def plan_for_car(self, car, current_time, obstacles) -> bool: ...
+
+      @abstractmethod
+      def cancel_plan(self, car): ...
+
+      @abstractmethod
+      def replan_all(self, active_cars, current_time, grid, ...) -> bool: ...
+      (optional: used by LaCAM0 for global replanning)
+
+(E) backend/planning/priority_planner_adapter.py
+  Purpose: Wraps existing PriorityPlanner to conform to BasePlanner.
+  Implementation:
+    - Thin wrapper. Delegates to existing PriorityPlanner methods.
+    - plan_for_car → self._planner.plan_for_car(car, current_time, obstacles)
+    - cancel_plan → self._planner.cancel_plan(car)
+    - replan_all → calls plan_for_car for each car in priority order (existing logic)
+
+(F) backend/planning/lacam0_planner_adapter.py
+  Purpose: LaCAM0 integration via subprocess.
+  Key responsibilities:
+    - Accepts a list of (car, start, goal) tuples.
+    - Delegates to LaCAM0FileGenerator to write .map and .scen to temp files.
+    - Calls the LaCAM0 executable via subprocess.run().
+    - Parses result.txt via LaCAM0ResultParser.
+    - Maps parsed paths back to car objects (by agent index → car ID).
+    - Stores paths in car objects (car.set_path(path)).
+  Subprocess call:
+    If backend runs on Windows:
+      subprocess.run(["wsl", lacam0_exe_path, "-i", scen_path, "-m", map_path,
+                      "-N", str(N), "-v", "0", "-o", result_path], timeout=30)
+    If backend runs inside WSL:
+      subprocess.run([lacam0_exe_path, "-i", scen_path, "-m", map_path,
+                      "-N", str(N), "-v", "0", "-o", result_path], timeout=30)
+  Configuration:
+    lacam0_exe_path: read from environment variable LACAM0_EXE or config file.
+    temp dir: use Python's tempfile.mkdtemp() for .map/.scen/result files.
+    timeout: configurable (default 30 seconds).
+  Path format compatibility:
+    LaCAM0 outputs paths as sequences of (x, y) positions per timestep.
+    These must be converted to the internal Car path format: list of (x, y, t) tuples.
+
+(G) backend/planning/lacam0_file_generator.py
+  Purpose: Generates .map and .scen files from current simulation state.
+
+  .map generation rules:
+    - Grid cells → '.' or '@':
+        WALL → '@'
+        ROAD → '.'
+        ENTRY → '.'
+        EXIT → '.'
+        PARKING (free or occupied by active car) → '.'
+        PARKING (occupied by PARKED/inactive car) → '@' (treat as obstacle)
+          (Note: parked cars are static obstacles that active cars cannot use)
+    - Output format:
+        type octile
+        height {H}
+        width {W}
+        map
+        {row_0}
+        ...
+        {row_H-1}
+
+  .scen generation rules:
+    - One line per active moving car (cars with intent PARK or EXIT).
+    - Waiting cars (not yet woken up) → skip (they appear as '@' in map).
+    - Each line: 0  {map_filename}  {W}  {H}  {start_x}  {start_y}  {goal_x}  {goal_y}  0.0
+    - Order: maintain a stable ordering (e.g. sorted by car_id) so that
+      agent index in result.txt maps back to car_id correctly.
+    - Only include N agents (the ones actively moving).
+
+(H) backend/planning/lacam0_result_parser.py
+  Purpose: Parses LaCAM0 result.txt into internal path format.
+  Steps:
+    1. Check "solved=1". If "solved=0", return None (plan failed).
+    2. Find "solution=" line.
+    3. For each subsequent line:
+       Parse "t:(x0,y0),(x1,y1),...,(xN,yN),"
+       → extract list of (x, y) per agent at timestep t.
+    4. Reconstruct per-agent path: list of (x, y, t) tuples.
+       path_for_agent_i = [(x_i_t0, y_i_t0, t0), (x_i_t1, y_i_t1, t1), ...]
+    5. Return dict: { agent_index: [(x, y, t), ...] }
+  Notes:
+    - The path returned by LaCAM0 may be longer than planning_horizon.
+      The adapter should truncate to planning_horizon steps.
+    - Agents that are already at their goal will have repeated positions.
+      The car object should handle this gracefully (stays put, marked done).
+
+(I) backend/planning/planner_manager.py
+  Purpose: Decides WHEN and WHICH planner to call.
+  Key responsibilities:
+    - Hold a reference to the active planner (BasePlanner).
+    - Track which events should trigger replanning:
+        NEW_CAR_ENTERED
+        CAR_WANTS_TO_EXIT
+        CAR_REACHED_GOAL
+        PATH_BECAME_INVALID
+        PERIODIC_HORIZON (every N timesteps)
+    - Avoid calling the planner every single timestep.
+    - For LaCAM0: call replan_all() with all active cars at once (batch planning).
+    - For PriorityPlanner: call plan_for_car() per car (individual planning, existing).
+  Rolling-horizon approach:
+    - Plan ahead for planning_horizon steps.
+    - Execute steps. When the horizon is exhausted (or an event fires), replan.
+    - Track per-car "steps remaining in current plan" to detect when replanning needed.
+
+
+────────────────────────────────────────────────────────────────────────────────
+7. FRONTEND CHANGES — FILES TO MODIFY
+────────────────────────────────────────────────────────────────────────────────
+
+(A) frontend/src/pages/SimulationConfig.tsx
+
+  Params to ADD:
+    - max_timesteps: number (0 = infinite/run until stopped)
+      UI: number input, 0 means "no limit"
+    - algorithm: "priority" | "lacam0"
+      UI: dropdown selector (add "LaCAM0" option)
+    - step_delay_ms: number (milliseconds per simulated step, controls speed)
+      UI: slider from 10ms (fast) to 1000ms (slow), default 100ms
+
+  Params to MODIFY:
+    - max_steps → renamed to max_timesteps, repurposed as optional cap (0 = off)
+    - arrival_lambda → keep as is (entrance rate, probability per step)
+    - initial_active_exit_rate → keep as is (exit rate, probability per step)
+
+  Save: still writes to sessionStorage. Add new fields to the stored object.
+
+(B) frontend/src/pages/Simulation.tsx
+
+  Complete restructure of data-fetching logic:
+  REMOVE:
+    - fetch POST to /simulation/run
+    - stepIndex/stepProgress state (pre-computed playback)
+    - "skip forward/backward" controls
+    - requestAnimationFrame playback loop based on pre-computed timesteps
+
+  ADD:
+    - WebSocket connection lifecycle (open, close, error, onmessage)
+    - First call: POST /simulation/start → get session_id + grid
+    - Then: open ws://localhost:8000/simulation/ws/{session_id}
+    - WebSocket state machine: CONNECTING → RUNNING → PAUSED/RUNNING → STOPPED
+    - Live state: liveCarPositions: Record<string, [number, number]>
+    - Live state: liveStats: TimestepStats
+    - Live state: currentTimestep: number
+    - Optional: circular buffer of last N timesteps for a "trail" effect
+
+  Control buttons:
+    - Pause/Resume: sends { type: "PAUSE" } or { type: "RESUME" } over WS
+    - Stop: sends { type: "STOP" } over WS
+    - Reset: sends { type: "RESET" } over WS (backend resets state, same config)
+    - Speed slider: controls a local display throttle (don't need to send to backend
+      — the step_delay_ms is set at start; OR send speed changes over WS)
+
+  Rendering:
+    - 2D canvas or 3D view renders liveCarPositions directly (not stepIndex into array)
+    - Stats panel updates from liveStats on each message
+    - Timestep counter shows currentTimestep
+    - Status badge shows RUNNING / PAUSED / STOPPED / ERROR
+
+
+────────────────────────────────────────────────────────────────────────────────
+8. LACAM0 INTEGRATION STRATEGY
+────────────────────────────────────────────────────────────────────────────────
+
+Q: How to call LaCAM0 from the backend?
+
+LaCAM0 is set up in WSL Ubuntu. Backend currently runs on Windows.
+
+Option A (RECOMMENDED): Run backend inside WSL too.
+  - Both the FastAPI backend and LaCAM0 live in the same WSL environment.
+  - subprocess call is straightforward: subprocess.run(["./build/main", ...])
+  - No path translation issues. Fastest file I/O (no WSL↔Windows boundary).
+  - To run backend in WSL: wsl uvicorn api_app:app --reload
+  - Frontend (browser) still connects to localhost (WSL port forwarding works on Win10/11)
+
+Option B: Backend on Windows, call LaCAM0 via "wsl" prefix.
+  - subprocess.run(["wsl", "/path/in/wsl/build/main", "-i", wsl_scen_path, ...])
+  - Windows paths must be translated to WSL paths (/mnt/c/...).
+  - File I/O crosses the WSL boundary — slower but workable for small inputs.
+  - More fragile: depends on WSL being installed and path mappings correct.
+
+Decision point: Ask the user which option they prefer. Plan assumes Option A
+(backend runs in WSL) since LaCAM0 is already set up there.
+
+LaCAM0 invocation in the adapter:
+  lacam0_dir = os.environ.get("LACAM0_DIR", "/home/user/lacam0")  # configurable
+  exe = os.path.join(lacam0_dir, "build/main")
+  result = subprocess.run(
+      [exe, "-i", scen_path, "-m", map_path, "-N", str(n_agents),
+       "-v", "0",  # silent
+       "-o", result_path],   # if LaCAM0 supports -o flag; else read from stdout
+      cwd=lacam0_dir,
+      capture_output=True,
+      timeout=30
+  )
+
+Note: Check if LaCAM0 supports -o output flag or writes to a fixed file. Adjust accordingly.
+Temp files: use Python tempfile to create .map, .scen, result.txt in /tmp.
+
+Q: Should LaCAM0 solve the entire simulation or just a horizon window?
+
+Answer: Rolling-horizon. LaCAM0 solves a snapshot problem (current positions → goals)
+and returns full paths. We execute only planning_horizon steps of those paths, then
+replan (unless no events fired). This keeps the problem size manageable.
+
+Q: Which cars are agents vs obstacles?
+
+Active cars (intent=PARK or intent=EXIT, not waiting) → MAPF agents in .scen
+Waiting parked cars (woken up = False) → obstacles in .map (treat cell as '@')
+Already-parked inactive cars → obstacles in .map
+Entry/Exit/Road cells with no car → free cells '.' in .map
+
+Q: How to handle replanning triggers?
+
+Track a "needs_replan" flag in PlannerManager. Set it to True when:
+  - A new car enters (spawned at entry)
+  - A waiting car wakes up (wants to exit)
+  - Any car reaches its goal
+  - Any car's path becomes invalid (blocked, cancelled)
+  - time % replan_interval == 0 (periodic safety net)
+
+At the start of each step(), PlannerManager checks needs_replan.
+If True: call planner.replan_all(active_cars, ...), clear flag.
+If False: skip (cars follow their existing paths).
+
+Q: How to handle planner failure or timeout?
+
+- If subprocess returns non-zero exit code or timeout expires:
+  - Log the error.
+  - Fall back to PriorityPlannerAdapter for this planning round.
+  - Set a "lacam0_fallback" flag and notify frontend via a WARNING message.
+- If solved=0 in result.txt: same fallback.
+- Cars without paths will be handled by the existing per-car replan logic in SimulationCore.
+
+
+────────────────────────────────────────────────────────────────────────────────
+9. EXISTING COMPONENTS TO MODIFY (SUMMARY)
+────────────────────────────────────────────────────────────────────────────────
+
+File                                    Change
+──────────────────────────────────────  ─────────────────────────────────────────
+backend/api_app.py                      Register ws_router; add lifespan
+backend/simulation_api/simulation_router.py  Add /start, /stop REST endpoints
+backend/simulation_api/simulation_dtos.py    Add LiveSimulationRequest, WS message types
+backend/core/simulation_core.py         Accept BasePlanner instead of PriorityPlanner;
+                                        add max_timesteps to SimulationConfig
+frontend/src/pages/SimulationConfig.tsx Add max_timesteps, algorithm, step_delay_ms
+frontend/src/pages/Simulation.tsx       Replace fetch with WebSocket; live rendering
+
+────────────────────────────────────────────────────────────────────────────────
+10. NEW COMPONENTS TO CREATE (SUMMARY)
+────────────────────────────────────────────────────────────────────────────────
+
+File                                         Purpose
+───────────────────────────────────────────  ─────────────────────────────────────
+backend/simulation_api/ws_router.py          WebSocket endpoint /simulation/ws/{id}
+backend/simulation_api/simulation_session.py Live session (asyncio loop + WS)
+backend/simulation_api/simulation_manager.py Session registry dict
+backend/planning/planner_interface.py        Abstract BasePlanner class
+backend/planning/priority_planner_adapter.py Wraps PriorityPlanner → BasePlanner
+backend/planning/lacam0_planner_adapter.py   Calls LaCAM0 via subprocess
+backend/planning/lacam0_file_generator.py    Generates .map and .scen files
+backend/planning/lacam0_result_parser.py     Parses LaCAM0 result.txt → paths
+backend/planning/planner_manager.py          Replanning policy and planner routing
+
+
+────────────────────────────────────────────────────────────────────────────────
+11. STEP-BY-STEP IMPLEMENTATION ORDER
+────────────────────────────────────────────────────────────────────────────────
+
+─── PHASE 1: WebSocket Infrastructure (no LaCAM0 yet) ───
+
+Step 1: Add WebSocket dependency to FastAPI (already included via starlette).
+        Create backend/simulation_api/simulation_session.py (stub: async loop,
+        WS send, pause/resume/stop events).
+        Create backend/simulation_api/simulation_manager.py (simple dict).
+
+Step 2: Create backend/simulation_api/ws_router.py.
+        Implement /simulation/ws/{session_id} WebSocket endpoint.
+        Implement /simulation/start REST endpoint in simulation_router.py.
+        Register ws_router in api_app.py.
+
+Step 3: Wire SimulationCore into SimulationSession.
+        Each step() call → serialize snapshot → send STEP message over WS.
+        Use asyncio.sleep(step_delay_ms/1000) between steps.
+
+Step 4: Implement control messages in SimulationSession:
+        PAUSE (set pause event), RESUME (clear pause event), STOP, RESET.
+
+Step 5: Update SimulationConfig.tsx:
+        Add max_timesteps, step_delay_ms, algorithm selector (priority only for now).
+
+Step 6: Update Simulation.tsx:
+        Replace fetch with WebSocket flow.
+        Render live car positions on each STEP message.
+        Wire pause/resume/stop/reset buttons to send WS messages.
+
+Step 7: End-to-end test: full lifelong simulation with Priority planner over WebSocket.
+
+─── PHASE 2: Planner Abstraction ───
+
+Step 8: Create backend/planning/planner_interface.py (BasePlanner ABC).
+
+Step 9: Create backend/planning/priority_planner_adapter.py
+        (thin wrapper around existing PriorityPlanner).
+
+Step 10: Create backend/planning/planner_manager.py
+         Implement needs_replan tracking and replanning triggers.
+
+Step 11: Update backend/core/simulation_core.py:
+         Constructor accepts BasePlanner instead of PriorityPlanner.
+         PlannerManager injects correct planner.
+
+Step 12: Test: same behavior as before, just through the new interface.
+
+─── PHASE 3: LaCAM0 Integration ───
+
+Step 13: Create backend/planning/lacam0_file_generator.py
+         Implement .map generation (grid → octile map format).
+         Implement .scen generation (active cars → agent lines).
+         Unit test with known grid layouts.
+
+Step 14: Create backend/planning/lacam0_result_parser.py
+         Implement result.txt parser.
+         Unit test with the existing result.txt from "understand lacam0/" folder.
+
+Step 15: Create backend/planning/lacam0_planner_adapter.py
+         Implement replan_all(): write temp files, call subprocess, parse result,
+         assign paths to cars.
+         Add fallback to priority planner on failure/timeout.
+         Test end-to-end with a small parking lot.
+
+Step 16: Update SimulationConfig.tsx:
+         Enable "LaCAM0" option in algorithm dropdown.
+         Pass algorithm choice in config to backend.
+
+Step 17: Update LiveSimulationRequest DTO to include algorithm field.
+         Update session creation to select correct planner based on config.
+
+Step 18: End-to-end test: lifelong simulation with LaCAM0 planner over WebSocket.
+
+─── PHASE 4: Polish & Optimization ───
+
+Step 19: Add simulation speed control (step_delay_ms adjustable during runtime
+         via WS message from frontend speed slider).
+
+Step 20: Add error handling (LaCAM0 timeout, subprocess failure, WS disconnect).
+         Frontend shows error banner when ERROR message received.
+
+Step 21: Adapt or disable the save/history feature for lifelong simulations
+         (can't save full timestep log for infinite runs; consider saving summary only).
+
+Step 22: Performance review:
+         - Profile LaCAM0 invocation overhead.
+         - Tune replan_interval (avoid over-replanning).
+         - Consider caching .map file (regenerate only if parked cars change).
+
+
+────────────────────────────────────────────────────────────────────────────────
+12. ANSWERING ALL QUESTIONS FROM THE PROMPT
+────────────────────────────────────────────────────────────────────────────────
+
+Q1. Which frontend files need to change?
+    - frontend/src/pages/SimulationConfig.tsx (add new params)
+    - frontend/src/pages/Simulation.tsx (replace fetch with WebSocket, live rendering)
+    No other frontend files need changes for the core feature.
+
+Q2. Which backend files need to change?
+    - backend/api_app.py
+    - backend/simulation_api/simulation_router.py
+    - backend/simulation_api/simulation_dtos.py
+    - backend/core/simulation_core.py (minor: accept BasePlanner, add max_timesteps)
+    All planning files stay as-is; only wrapped by adapters.
+
+Q3. Best communication architecture?
+    WebSocket (bidirectional) + REST for session creation.
+    (See Section 4 above.)
+
+Q4. How should the backend timestep loop be structured?
+    As an asyncio Task (coroutine) inside SimulationSession:
+      async def _run_loop(self):
+          while not self._stop_event.is_set():
+              await self._pause_event.wait()   # blocks while paused
+              if max_timesteps and self.sim.time >= max_timesteps:
+                  break
+              self.sim.step()
+              await self._send_step()
+              await asyncio.sleep(self.step_delay_ms / 1000)
+    SimulationCore.step() is synchronous Python. If it is slow (e.g. with LaCAM0
+    subprocess), wrap in asyncio.get_event_loop().run_in_executor(None, sim.step)
+    to avoid blocking the event loop.
+
+Q5. How should entering cars be generated?
+    No change from current logic: Poisson arrivals.
+    Each timestep: if random() < arrival_lambda AND free spots exist AND free entry
+    exists: spawn new car. arrival_lambda is still configured by user.
+    The new "entrance rate" concept maps directly to arrival_lambda.
+
+Q6. How should exiting cars be generated?
+    No change from current logic.
+    Each timestep: for each waiting car, if random() < exit_rate: wake it up.
+    exit_rate maps to initial_active_exit_rate.
+    In the lifelong model, ALL parked cars (not just initial_active_cars) should be
+    eligible to eventually want to exit. This may require extending the logic so that
+    cars that parked (intent was PARK, now parked) can also "decide to leave" after
+    some dwell time, controlled by exit_rate.
+
+Q7. How should active cars be represented?
+    Same as current: Car objects in SimulationCore.active_cars dict.
+    Each car has: car_id, current_position, goal, path, intent (PARK/EXIT), flags.
+    No structural change needed.
+
+Q8. How should parked/inactive cars be represented?
+    Same as current: car_positions tracks all cars including parked ones.
+    ParkingManager.occupied_spots tracks which spots are taken.
+    In the LaCAM0 .map, these cells are marked as '@' (obstacle).
+    In the future, parked cars should have a "dwell time" counter so they can
+    eventually decide to exit (intent changes from None to EXIT, car reactivated).
+
+Q9. How should LaCAM0 be called from the backend?
+    Via subprocess. Recommended: run backend inside WSL (same environment as LaCAM0).
+    Configuration via LACAM0_DIR environment variable.
+    Timeout of 30 seconds (configurable). On timeout: fall back to Priority planner.
+    (See Section 8 above.)
+
+Q10. How to generate .map and .scen files?
+    LaCAM0FileGenerator class. (See Section 6-G above.)
+
+Q11. How to parse LaCAM0 result.txt?
+    LaCAM0ResultParser class. (See Section 6-H above.)
+    Returns dict { agent_index → list of (x, y, t) tuples }.
+    LaCAM0PlannerAdapter maps agent_index → car_id by stable sort order.
+
+Q12. How to handle replanning?
+    Event-driven via PlannerManager.
+    Replan when: new car enters, car reaches goal, car wakes up to exit, path invalidated.
+    Periodic fallback: replan every N timesteps as a safety net.
+    Rolling horizon: execute planning_horizon steps, then replan.
+
+Q13. How to handle planner failure or timeout?
+    If LaCAM0 fails/times out: fall back to PriorityPlannerAdapter for that round.
+    Send a WARNING message to frontend (not an ERROR — simulation continues).
+    Log the failure. Track fallback count for diagnostics.
+
+Q14. How to avoid recomputing full global solution every timestep?
+    Only call the planner on events (see Q12).
+    Cars that still have valid path steps ahead continue on those steps without replanning.
+    Only cars without a path (or with expired paths) trigger a new plan.
+
+Q15. How should the frontend visualize while updates stream in?
+    Each STEP message: update liveCarPositions → trigger React re-render.
+    2D canvas: draw directly from liveCarPositions without interpolation (or with
+    light CSS transitions for smooth movement).
+    3D view: update Three.js positions on each message.
+    Stats panel: update from liveStats in real time.
+    No pre-computed buffer needed. Optional: keep last 50 steps for a "history trail".
+
+Q16. How should pause/resume/stop/reset be handled?
+    Pause:  Frontend sends { type: "PAUSE" } → Backend clears _pause_event → loop
+            blocks at "await _pause_event.wait()" → Backend sends STATUS PAUSED.
+    Resume: Frontend sends { type: "RESUME" } → Backend sets _pause_event → loop
+            continues → Backend sends STATUS RUNNING.
+    Stop:   Frontend sends { type: "STOP" } → Backend sets _stop_event → loop exits
+            → Backend sends STATUS STOPPED → WS stays open (or closes gracefully).
+    Reset:  Frontend sends { type: "RESET" } → Backend stops current loop, re-creates
+            SimulationCore with same config, starts new loop → sends INIT + first STEP.
+
+Q17. What to implement first, second, third...?
+    See Section 11 (Phase 1 → 2 → 3 → 4).
+
+
+────────────────────────────────────────────────────────────────────────────────
+13. RISKS, ASSUMPTIONS, AND OPEN QUESTIONS
+────────────────────────────────────────────────────────────────────────────────
+
+RISKS:
+
+R1. asyncio + blocking SimulationCore.step()
+    Risk: If step() is slow (LaCAM0 subprocess call), it blocks the asyncio event loop,
+    making the WebSocket unresponsive (can't receive PAUSE/STOP messages).
+    Mitigation: Wrap step() in asyncio.get_event_loop().run_in_executor(None, sim.step)
+    to run it in a thread pool without blocking the event loop.
+
+R2. WSL subprocess path translation
+    Risk: If backend runs on Windows side, file paths must be translated between
+    Windows and WSL (C:\Users\... vs /mnt/c/Users/...).
+    Mitigation: Run backend inside WSL. This avoids the problem entirely.
+
+R3. LaCAM0 coordinate system
+    Risk: LaCAM0 uses (x=column, y=row) which matches the existing simulation's
+    (x, y) format based on the result.txt analysis. But must be verified carefully.
+    Mitigation: Write unit tests comparing parsed positions to expected positions
+    using the known example files in "understand lacam0/".
+
+R4. LaCAM0 path is offline (solves to completion, not rolling-horizon natively)
+    Risk: LaCAM0 will solve the MAPF problem fully to all agents' goals. In a lifelong
+    setting, goals change (new cars enter, cars want to exit). We must truncate the
+    returned paths to planning_horizon and replan when goals change.
+    Mitigation: PlannerManager enforces rolling horizon. Adapter truncates paths.
+
+R5. Save/history feature incompatibility
+    Risk: The current save feature stores the full timestep list. For lifelong sims
+    this is unbounded. The existing SimulationSaveRequest DTO will break.
+    Mitigation: Disable save during lifelong sessions or save only summary statistics.
+    Address in Phase 4.
+
+R6. Concurrent sessions
+    Risk: Multiple browser tabs could create multiple sessions consuming memory/CPU.
+    Mitigation: SimulationManager can enforce a max session limit (e.g. 1 per client).
+    Low priority for now (single-user local app).
+
+ASSUMPTIONS:
+
+A1. LaCAM0 binary is already compiled in WSL at a known path (e.g. ~/lacam0/build/main).
+    LACAM0_DIR environment variable will be used to configure the path.
+
+A2. Backend will be run from inside WSL going forward (not Windows PowerShell).
+    This is the cleanest integration path.
+
+A3. The frontend continues to run in the browser on the Windows side.
+    WSL port forwarding (auto-forwarding on Windows 10/11) makes localhost:8000 accessible.
+
+A4. LaCAM0 does not natively support a "-o output_file" flag. We may need to redirect
+    stdout or read from a fixed output file. This needs to be verified by testing.
+    (The example files in "understand lacam0/" suggest result.txt is a fixed output file.)
+
+A5. The existing Car, ParkingManager, ReservationTable, and Grid classes are not
+    changed in structure — only the planner layer is abstracted.
+
+A6. "Lifelong" means: parked cars that arrived via arrival_lambda can ALSO eventually
+    decide to leave (not just initial_active_cars). This needs to be clarified.
+    Current code only allows initial_active_cars to exit. New behavior: all parked
+    cars should be eligible to exit after a dwell time.
+
+OPEN QUESTIONS:
+
+OQ1. Should parked arriving cars (cars that arrived via Poisson and successfully
+     parked) also be eligible to leave? If yes, we need a dwell time parameter
+     (e.g., after parking, a car waits dwell_time ± noise steps before wanting to exit).
+
+OQ2. Should the frontend show historical playback scrubbing for lifelong sims?
+     If yes, we need to buffer all timesteps on the frontend (unbounded memory).
+     Compromise: ring buffer of last N=200 steps with scrub capability within that window.
+
+OQ3. LaCAM0's "-o" output flag: does it exist, and what is the exact output path?
+     Need to run LaCAM0 with --help or read its source to confirm.
+
+OQ4. What should happen to the simulation history/save feature for lifelong runs?
+     Save only summary stats? Disable saving? Allow snapshot saves on demand?
+
+OQ5. How many agents can LaCAM0 handle before it becomes too slow for real-time use?
+     You mentioned 1320 agents is fast. But in a parking lot scenario with frequent
+     replanning, what is the practical latency per replan call?
+
+OQ6. Should the simulation speed be adjustable at runtime (from the frontend during
+     a running simulation)? If yes, add a WS message type: { type: "SET_SPEED", ms: 50 }.
+
+================================================================================
+END OF ARCHITECTURE PLAN
+================================================================================

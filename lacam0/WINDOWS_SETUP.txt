@@ -1,0 +1,89 @@
+LaCaM - Windows Setup Guide
+============================
+
+Prerequisites
+-------------
+- Git
+- CMake >= 3.16 (https://cmake.org/)
+- winget (comes with Windows 10/11)
+
+
+Step 1: Initialize Git Submodules
+----------------------------------
+The scripts/ submodule requires SSH keys and is only needed for experiments.
+Initialize only the build-required submodules:
+
+    git submodule update --init third_party/argparse third_party/googletest
+
+
+Step 2: Install MSYS2 and MinGW-w64 (C++ Compiler + Make)
+-----------------------------------------------------------
+Run in PowerShell:
+
+    winget install MSYS2.MSYS2 --source winget --accept-source-agreements --accept-package-agreements
+    C:\msys64\usr\bin\bash.exe -lc "pacman -S --noconfirm mingw-w64-x86_64-gcc mingw-w64-x86_64-make"
+
+Note: If you already have Visual Studio 2022 with the "Desktop development with C++"
+workload installed, you can skip this step and use the Visual Studio generator instead
+(see Alternative Build section below).
+
+
+Step 3: Add MinGW to PATH (Permanent)
+--------------------------------------
+Run once in PowerShell to permanently add MinGW to your user PATH:
+
+    [Environment]::SetEnvironmentVariable("PATH", "C:\msys64\mingw64\bin;" + [Environment]::GetEnvironmentVariable("PATH", "User"), "User")
+
+Then restart your terminal for the change to take effect.
+
+
+Step 4: Apply Windows Compatibility Fix
+-----------------------------------------
+The type 'uint' is implicitly available on Linux but not on Windows.
+Add the following lines to lacam/include/utils.hpp, after the line
+"using Time = std::chrono::steady_clock;":
+
+    #ifdef _WIN32
+    using uint = unsigned int;
+    #endif
+
+This has already been applied in this repository.
+
+
+Step 5: Configure and Build
+-----------------------------
+Run in PowerShell from the repo root:
+
+    cmake -B build -G "MinGW Makefiles" -DCMAKE_BUILD_TYPE=Release
+    cmake --build build -j4
+
+The executable will be at: build/main.exe
+
+
+Step 6: Run
+------------
+Example from the README:
+
+    .\build\main.exe -i assets/random-32-32-10-random-1.scen -m assets/random-32-32-10.map -N 50 -v 1
+
+Output is saved to: build/result.txt
+
+For all available options:
+
+    .\build\main.exe --help
+
+
+Alternative Build (Visual Studio 2022 with C++ workload)
+---------------------------------------------------------
+If you have VS 2022 with "Desktop development with C++" installed:
+
+    cmake -B build -G "Visual Studio 17 2022"
+    cmake --build build --config Release -j4
+
+
+Notes
+-----
+- The scripts/ submodule (for experiments) uses SSH and requires a GitHub SSH key.
+  See: https://docs.github.com/en/authentication/connecting-to-github-with-ssh
+- Grid maps and scenarios in assets/ are from https://movingai.com/benchmarks/mapf.html
+- Visualizer: https://github.com/kei18/mapf-visualizer

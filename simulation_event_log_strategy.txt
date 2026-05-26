@@ -1,0 +1,350 @@
+Simulation Event Log — Strategy Document
+==========================================
+Analysis + proposal only. No code changed yet.
+Awaiting approval before implementation.
+
+=======================================================================
+1. CODEBASE ANALYSIS — FINDINGS
+=======================================================================
+
+A. Where cars are CREATED / INTRODUCED
+---------------------------------------
+  simulation_core.py  _initialize_cars()      — line 70
+    Creates config.initial_cars cars at t=0, placed directly into
+    parked_cars. These are "initial" cars (is_initial=True).
+
+  simulation_core.py  _maybe_poisson_arrival() — line 150
+    Each step: rolls Poisson arrival. If hit, calls
+    parking_manager.create_active_car() → _handle_new_car().
+    is_initial = False for these (arriving) cars.
+
+  → Event point for "entered_lot": inside _handle_new_car()
+    (line 173: active_cars[car.car_id] = car, total_arrived += 1).
+
+B. Where cars are REMOVED / EXITED
+------------------------------------
+  simulation_core.py  _advance_cars()
+    When a car with intent == "EXIT" reaches its goal:
+      Line 409/416: exited_car_ids.add(car_id), cars_pending_removal.add()
+      Line 472/479: same in second branch
+    _cleanup_exited_cars() (line 561): physically removes from car_positions.
+
+  lacam0_simulation_core.py  _handle_car_exit()
+    LaCAM0 has its own exit handler that also removes cars upon reaching
+    original exit cells (before the ghost goal).
+
+  → Event point for "exited_lot": at both cars_pending_removal.add() sites
+    and in lacam0_simulation_core._handle_car_exit().
+
+C. Where CAR INTENT is stored + where it CHANGES
+--------------------------------------------------
+  car.intent attribute on Car object. Values: "PARK" | "EXIT".
+
+  Intent changes in simulation_core.py:
+    _wake_parked_car()  (line 134): PARK → EXIT (normal wakeup)
+    _handle_new_car()   (line 209): PARK → EXIT (too many plan failures)
+    _advance_cars()     (lines 268, 437): PARK → EXIT (blocked too many times)
+
+  Intent changes in lacam0_simulation_core.py:
+    Same patterns, inherited from base class.
+
+  IMPORTANT: EXIT → PARK change does NOT currently happen in the codebase.
+  The prompt asks for it, but the simulation never changes intent back to PARK.
+  → We can safely detect PARK → EXIT only. We can include EXIT → PARK as a
+    future-proof event type without it ever firing until the logic is added.
+
+D. How the FRONTEND receives simulation updates
+------------------------------------------------
+  WebSocket at /simulation/ws/{session_id}
+  Messages currently sent by simulation_session.py:
+    { type: "INIT",   grid: {...} }
+    { type: "STEP",   t: N, cars: { car_id: [x, y, is_initial] }, stats: {...} }
+    { type: "STATUS", status: "PAUSED|RUNNING|STOPPED|COMPLETED" }
+    { type: "ERROR",  message: "..." }
+
+  The STEP message currently contains ONLY current car positions and stats.
+  It does NOT contain intent information or event information.
+
+  Frontend (Simulation.tsx ws.onmessage, line 169):
+    Parses every STEP → updates liveCarsRef and prevCarsRef.
+    The car dict is { car_id: [x, y, is_initial] }.
+
+E. What frontend CAN detect without backend changes
+----------------------------------------------------
+  By comparing liveCarsRef vs prevCarsRef each STEP:
+  - "entered_lot": car_id in current but not in previous ✓
+  - "exited_lot":  car_id in previous but not in current ✓
+  - "intent changed": NOT detectable — intent is not in the STEP payload ✗
+
+  → Frontend diff can handle enter/exit, but NOT intent changes.
+
+=======================================================================
+2. OPTION COMPARISON — WHERE TO GENERATE EVENTS
+=======================================================================
+
+Option A: Frontend diff (compare prev/current car sets per STEP)
+  Pros: zero backend changes.
+  Cons: cannot detect intent changes (intent not in payload).
+        Fragile: if a car briefly disappears and reappears it would log
+        spurious enter/exit events.
+  Verdict: insufficient — cannot cover all 4 required event types.
+
+Option B: Backend events in simulation core + included in STEP message
+  Generate events inside simulation_core.py at the exact lines where
+  state changes happen. Accumulate in a per-step list (pending_events).
+  simulation_session._send_step() includes them in the STEP payload.
+  Pros: covers all 4 events; single source of truth; no guessing.
+        Additive change to STEP message (new optional field).
+        Backward-compatible: old frontends ignore unknown fields.
+  Cons: small backend change needed (5–10 lines).
+  Verdict: RECOMMENDED.
+
+Option C: Events in parking_manager / API layer
+  Pros: single interception point.
+  Cons: parking_manager doesn't see the full lifecycle (exits happen in
+        _advance_cars, not in parking_manager). Would need partial
+        instrumentation anyway.
+  Verdict: incomplete — same limitations as Option A for exit/intent.
+
+Option D: Separate event endpoint / second WS channel
+  Pros: clean separation.
+  Cons: requires new infrastructure, adds complexity for a simple log.
+  Verdict: over-engineered.
+
+→ CHOSEN: Option B — backend events inside simulation_core, sent via
+  existing STEP WS message as an optional `events` list field.
+
+=======================================================================
+3. PROPOSED EVENT DATA STRUCTURE
+=======================================================================
+
+Each event is a plain dict attached to the STEP message:
+
+  {
+    "step":       15,           // simulation timestep (int)
+    "car_id":     "7",          // string car ID (matches frontend key format)
+    "event_type": "entered_lot" | "exited_lot"
+                | "intent_park_to_exit" | "intent_exit_to_park",
+    "message":    "Car 7 has entered the lot"   // human-readable string
+  }
+
+The STEP message becomes:
+  {
+    "type":   "STEP",
+    "t":      N,
+    "cars":   { ... },
+    "stats":  { ... },
+    "events": [ { ... }, { ... } ]   // NEW — empty list if no events this step
+  }
+
+Design notes:
+  - events is always present (empty list by default) — frontend never needs
+    to check `if "events" in msg`.
+  - car_id is a string to match the existing cars dict key format.
+  - message is pre-formatted server-side — frontend just renders it.
+  - step is included in each event so events can be displayed out-of-order
+    or stored independently from the STEP message.
+  - Future event types (e.g. "plan_failed", "replanned") can be added
+    without changing the structure.
+
+=======================================================================
+4. BACKEND IMPLEMENTATION PLAN
+=======================================================================
+
+Files to change:
+
+A. backend/core/simulation_core.py
+   Add: self.pending_events: list = []   (in __init__)
+   Add: self._emit_event(step, car_id, event_type, message) helper
+   Instrument (5 callsites):
+     _handle_new_car()          → emit "entered_lot"
+     _advance_cars() exit path  → emit "exited_lot"   (both branches)
+     _wake_parked_car()         → emit "intent_park_to_exit"
+     _advance_cars() PARK→EXIT  → emit "intent_park_to_exit" (2 places)
+   Add: step() clears pending_events at the START of each step call.
+
+B. backend/core/lacam0_simulation_core.py
+   _handle_car_exit(): emit "exited_lot"
+   (inherits pending_events from base class — no __init__ changes needed)
+
+C. backend/simulation_api/simulation_session.py
+   _send_step(): read sim.pending_events, include as "events" field.
+   After reading, do NOT clear — clearing is done at start of next step().
+
+Total backend changes: ~20 lines across 3 files.
+
+=======================================================================
+5. FRONTEND DISPLAY STRATEGY
+=======================================================================
+
+Placement: a narrow scrollable log panel to the RIGHT of the simulation
+grid, inside .simContent (which becomes a flex-row).
+
+Layout change:
+  .simContent {
+    flex-direction: row;   /* was column */
+  }
+  .canvasContainer { flex: 1; min-width: 0; }   /* same as before */
+  .simEventLog { width: 220px; flex-shrink: 0; } /* new */
+
+Visual design:
+  - Same dark card style as .simStats (background: rgba(15,23,42,0.95),
+    border: 1px solid rgba(148,163,184,0.15), border-radius: 16px).
+  - Header row: "Event Log" title + small entry count badge.
+  - Scrollable message list: each entry shows:
+      [step icon]  [message text]          [step number]
+      e.g.: → Car 7 has entered the lot    t=15
+  - Color-coded icons/accents:
+      entered_lot:        green  (#4ade80)
+      exited_lot:         red    (#f87171)
+      intent_park_to_exit: amber  (#fbbf24)
+      intent_exit_to_park: cyan   (#38bdf8)
+  - The log is only rendered in 2D mode (viewMode === "2D").
+    In 3D mode, the log panel is hidden (display: none or not rendered)
+    to avoid layout disruption. The events ARE still collected
+    (state updates continue) so switching to 2D shows a complete log.
+    This can be made an option later.
+
+=======================================================================
+6. SCROLL BEHAVIOR
+=======================================================================
+
+  - useRef for the log list container (logRef).
+  - userScrolled: boolean state. Set to true when user scrolls upward
+    (onScroll: if scrollTop < scrollHeight - clientHeight - threshold).
+    Reset to false when user scrolls back to bottom.
+  - Auto-scroll: in useEffect triggered by events.length:
+      if (!userScrolled) logRef.current.scrollTop = logRef.current.scrollHeight
+  - Performance: keep only last MAX_LOG_ENTRIES = 300 events in state.
+    Older entries are dropped silently (they are only visual display data).
+
+=======================================================================
+7. FRONTEND STATE AND PERFORMANCE
+=======================================================================
+
+State management:
+  const [logEvents, setLogEvents] = useState<LogEvent[]>([]);
+
+  On STEP message:
+    if (msg.events?.length) {
+      setLogEvents(prev => [...prev, ...msg.events].slice(-MAX_LOG_ENTRIES));
+    }
+
+  On RESET (INIT message):
+    setLogEvents([]);
+
+  Only update state when there are actual new events → avoids re-render
+  on most timesteps (most steps have 0 events).
+
+  MAX_LOG_ENTRIES = 300 — enough for long simulations without memory bloat.
+  300 simple div elements is trivially fast for React to render.
+
+  The log panel is position: sticky / flex in the layout — no canvas ops,
+  no animation, no z-index conflicts with the grid.
+
+=======================================================================
+8. COMPATIBILITY CHECK
+=======================================================================
+
+2D simulation:   Log panel rendered alongside the grid. ✓
+3D simulation:   Events collected but log hidden. Grid unaffected. ✓
+Lifelong flow:   Poisson arrivals and exits fire continuously →
+                 log fills naturally with real-time events. ✓
+WebSocket flow:  events field added to existing STEP message. Backward-
+                 compatible (old clients ignore unknown fields). ✓
+Simulation reset: INIT message triggers setLogEvents([]) — log clears. ✓
+Old simulation results (no events field): not applicable to live
+                 WebSocket mode. The /run batch endpoint is unaffected
+                 (events are only for the live WS flow). ✓
+
+=======================================================================
+9. EDGE CASES
+=======================================================================
+
+Same car entering and exiting multiple times:
+  Each entry is a separate STEP event with a timestamp.
+  The log just appends all of them chronologically. ✓
+
+Car intent changing multiple times:
+  Each intent change emits one event. Multiple changes appear as
+  multiple log entries — this is correct behaviour. ✓
+
+Car removed unexpectedly (e.g. simulation error):
+  If a car disappears from car_positions without going through the
+  normal exit path, it will not emit "exited_lot". This is an existing
+  correctness issue in the simulation, not a log issue.
+  Mitigation: frontend can optionally detect disappearing cars by diff.
+
+Simulation reset / restart:
+  INIT message → setLogEvents([]) on frontend. pending_events is cleared
+  at the start of each step() — after reset, the new simulation starts
+  fresh. ✓
+
+Loading old simulation result (no events field):
+  The /run endpoint returns SimulationResponse (no events field).
+  The log feature is only for the live WebSocket mode. Old replay mode
+  is unaffected. ✓
+
+Very large number of cars/events:
+  With 50 cars and high exit_rate, events could fire at 5-10 per step.
+  Capped at MAX_LOG_ENTRIES=300, the state stays bounded.
+  Each setLogEvents() call is a single O(n) slice operation. ✓
+
+=======================================================================
+10. STEP-BY-STEP IMPLEMENTATION PLAN
+=======================================================================
+
+Step 1 — Backend: simulation_core.py
+  1a. Add `self.pending_events = []` to __init__.
+  1b. Add helper:
+        def _emit_event(self, car_id, event_type, message):
+            self.pending_events.append({
+                "step": self.time,
+                "car_id": str(car_id),
+                "event_type": event_type,
+                "message": message
+            })
+  1c. In step(): add `self.pending_events = []` at the very start.
+  1d. Instrument callsites (5 lines added total):
+        _handle_new_car():  self._emit_event(car.car_id, "entered_lot", ...)
+        exit in _advance_cars() ×2: self._emit_event(car_id, "exited_lot", ...)
+        _wake_parked_car(): self._emit_event(car.car_id, "intent_park_to_exit", ...)
+        PARK→EXIT in _advance_cars() ×2: same
+
+Step 2 — Backend: lacam0_simulation_core.py
+  2a. In _handle_car_exit(): self._emit_event(car_id, "exited_lot", ...)
+
+Step 3 — Backend: simulation_session.py
+  3a. In _send_step(): add events=list(sim.pending_events) to the payload.
+      Use list() to copy — ensures the dict is not mutated after send.
+
+Step 4 — Frontend: Simulation.tsx
+  4a. Add LogEvent TypeScript interface.
+  4b. Add `const [logEvents, setLogEvents] = useState<LogEvent[]>([])`.
+  4c. In ws.onmessage STEP handler: parse msg.events and call setLogEvents.
+  4d. In ws.onmessage INIT handler: setLogEvents([]).
+  4e. In handleReset: setLogEvents([]).
+  4f. Add log panel JSX (only in 2D mode).
+  4g. Add auto-scroll logic with userScrolled ref.
+
+Step 5 — Frontend: Simulation.css
+  5a. Change .simContent to flex-direction: row.
+  5b. Add .simEventLog styles (dark card, scroll, fixed width).
+  5c. Add .logEntry, .logEntry--entered, .logEntry--exited, etc. styles.
+
+=======================================================================
+11. RISKS
+=======================================================================
+
+- Minimal: pending_events list cleared each step — no memory growth.
+- The 5 instrumentation callsites are straightforward reads of existing
+  variables (car.car_id, car.intent, self.time) — no new logic.
+- .simContent changing from column to row changes the grid height slightly
+  (it loses top/bottom centering that was from justify-content: center).
+  This needs a CSS test at different screen sizes.
+- If MAX_LOG_ENTRIES is set too low, users miss earlier events.
+  300 is a reasonable default; can be a config constant.
+
+=======================================================================
+END OF STRATEGY
+=======================================================================
