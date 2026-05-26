@@ -7,7 +7,7 @@ import bgHero from "../assets/HomePage.webp";
 import {
   Layers, Plus, Trash2, Play, RotateCcw, CheckCircle2,
   XCircle, Loader2, Cpu, Hash, LogIn, LogOut, Clock,
-  Database, Zap,
+  Database, Zap, Save, X,
 } from "lucide-react";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -562,6 +562,37 @@ function BatchNum({ label, value, min, max, onChange }: {
 function SimResultCard({ index, sim }: { index: number; sim: BatchSimState }) {
   const r = sim.result;
   const algoLabel = ALGO_OPTIONS.find(a => a.value === sim.entry.algorithm)?.label ?? sim.entry.algorithm;
+  const [showSaveInput, setShowSaveInput] = useState(false);
+  const [saveName, setSaveName] = useState(`Simulation ${index + 1}`);
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+
+  const handleSave = async () => {
+    setSaving(true);
+    setSaveError(null);
+    try {
+      const res = await fetch(`${API_URL}/simulation/headless/save`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: saveName.trim() || `Simulation ${index + 1}`,
+          result: r,
+          config_json: JSON.stringify(sim.entry),
+        }),
+      });
+      if (!res.ok) {
+        const txt = await res.text();
+        throw new Error(`HTTP ${res.status}: ${txt}`);
+      }
+      setSaved(true);
+      setShowSaveInput(false);
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSaving(false);
+    }
+  };
 
   return (
     <section className={`setupCard batchResultCard batchResultCard--${sim.status}`}>
@@ -616,6 +647,42 @@ function SimResultCard({ index, sim }: { index: number; sim: BatchSimState }) {
             <StatCard title="Memory Avg"  val={`${r.memory_usage_avg_mb} MB`}
               sub={`peak ${r.memory_usage_peak_mb} MB`} />
           )}
+        </div>
+      )}
+
+      {/* Save */}
+      {sim.status === "success" && r && (
+        <div className="batchSaveRow">
+          {saved ? (
+            <span className="batchSavedBadge">
+              <CheckCircle2 size={14} style={{ marginRight: 5 }} />
+              Saved to history
+            </span>
+          ) : showSaveInput ? (
+            <div className="batchSaveInputRow">
+              <input
+                className="numInput batchSaveNameInput"
+                type="text"
+                value={saveName}
+                onChange={e => setSaveName(e.target.value)}
+                placeholder="Enter a name…"
+                onKeyDown={e => { if (e.key === "Enter") handleSave(); if (e.key === "Escape") { setShowSaveInput(false); setSaveError(null); } }}
+                autoFocus
+              />
+              <button className="batchSaveConfirmBtn" onClick={handleSave} disabled={saving}>
+                {saving ? <Loader2 size={14} className="batchSpinner" /> : <><Save size={13} style={{ marginRight: 5 }} />Save</>}
+              </button>
+              <button className="batchSaveCancelBtn" onClick={() => { setShowSaveInput(false); setSaveError(null); }} disabled={saving}>
+                <X size={14} />
+              </button>
+            </div>
+          ) : (
+            <button className="batchSaveBtn" onClick={() => setShowSaveInput(true)}>
+              <Save size={14} style={{ marginRight: 7 }} />
+              Save Result
+            </button>
+          )}
+          {saveError && <div className="batchSaveError">{saveError}</div>}
         </div>
       )}
     </section>
