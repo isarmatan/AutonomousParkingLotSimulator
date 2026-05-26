@@ -55,6 +55,13 @@ type BatchSimEntry = {
   initial_cars: number;
   max_arriving_cars: number;
   max_timesteps: number;
+  layout_source: "generate" | "load";
+  layout_width: number;
+  layout_height: number;
+  layout_entries: number;
+  layout_exits: number;
+  layout_parking_spots: number;
+  layout_parking_lot_id: string;
 };
 
 type BatchSimStatus = "pending" | "running" | "success" | "failed";
@@ -64,16 +71,6 @@ type BatchSimState = {
   status: BatchSimStatus;
   result?: HeadlessResult;
   error?: string;
-};
-
-type LayoutConfig = {
-  source: "generate" | "load";
-  width: number;
-  height: number;
-  entries: number;
-  exits: number;
-  parking_spots: number;
-  parkingLotId: string;
 };
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -96,6 +93,13 @@ const DEFAULTS: Omit<BatchSimEntry, "id"> = {
   initial_cars: 5,
   max_arriving_cars: 0,
   max_timesteps: 1000,
+  layout_source: "generate",
+  layout_width: 20,
+  layout_height: 20,
+  layout_entries: 1,
+  layout_exits: 1,
+  layout_parking_spots: 20,
+  layout_parking_lot_id: "",
 };
 
 function makeEntry(): BatchSimEntry {
@@ -111,25 +115,15 @@ export default function BatchSimulationConfig() {
   const [batchSims, setBatchSims] = useState<BatchSimState[]>([
     { entry: makeEntry(), status: "pending" },
   ]);
-  const [layout, setLayout] = useState<LayoutConfig>({
-    source: "generate",
-    width: 20,
-    height: 20,
-    entries: 1,
-    exits: 1,
-    parking_spots: 20,
-    parkingLotId: "",
-  });
 
   // ── Validation ────────────────────────────────────────────────────────────
-  const simErrors = batchSims.map(s => s.entry.max_timesteps < 1 ? "Max Timesteps must be ≥ 1" : null);
-  const layoutError =
-    layout.source === "load" && layout.parkingLotId.trim() === ""
-      ? "Enter a Parking Lot ID"
-      : layout.source === "generate" && (layout.width < 5 || layout.height < 5)
-      ? "Width and Height must be ≥ 5"
-      : null;
-  const canRun = simErrors.every(e => e === null) && layoutError === null;
+  const simErrors = batchSims.map(s => {
+    if (s.entry.max_timesteps < 1) return "Max Timesteps must be ≥ 1";
+    if (s.entry.layout_source === "load" && s.entry.layout_parking_lot_id.trim() === "") return "Enter a Parking Lot ID";
+    if (s.entry.layout_source === "generate" && (s.entry.layout_width < 5 || s.entry.layout_height < 5)) return "Width & Height must be ≥ 5";
+    return null;
+  });
+  const canRun = simErrors.every(e => e === null);
 
   // ── Helpers ───────────────────────────────────────────────────────────────
   const addSim = () => {
@@ -146,10 +140,6 @@ export default function BatchSimulationConfig() {
     setBatchSims(prev =>
       prev.map(s => s.entry.id === id ? { ...s, entry: { ...s.entry, [field]: value } } : s)
     );
-  };
-
-  const updateLayout = (field: keyof LayoutConfig, value: string | number) => {
-    setLayout(prev => ({ ...prev, [field]: value }));
   };
 
   // ── Run ───────────────────────────────────────────────────────────────────
@@ -173,18 +163,18 @@ export default function BatchSimulationConfig() {
         max_steps: entry.max_timesteps,
       };
 
-      if (layout.source === "generate") {
+      if (entry.layout_source === "generate") {
         payload.source = "generate";
-        payload.width = layout.width;
-        payload.height = layout.height;
+        payload.width = entry.layout_width;
+        payload.height = entry.layout_height;
         payload.rules = {
-          num_entries: layout.entries,
-          num_exits: layout.exits,
-          num_parking_spots: layout.parking_spots,
+          num_entries: entry.layout_entries,
+          num_exits: entry.layout_exits,
+          num_parking_spots: entry.layout_parking_spots,
         };
       } else {
         payload.source = "load";
-        payload.parkingLotId = layout.parkingLotId.trim();
+        payload.parkingLotId = entry.layout_parking_lot_id.trim();
       }
 
       try {
@@ -235,62 +225,6 @@ export default function BatchSimulationConfig() {
       {/* ── CONFIG PHASE ── */}
       {phase === "config" && (
         <div className="setupPage">
-          {/* Layout Source Card */}
-          <section className="setupCard">
-            <div className="cardHead">
-              <h2 className="cardTitle">
-                <span className="cardIcon"><Database size={18} /></span>
-                Parking Lot (shared by all simulations)
-              </h2>
-              <p className="cardSub">All simulations in this batch use the same parking lot.</p>
-            </div>
-
-            <div className="batchLayoutToggle">
-              <button
-                className={`batchSourceBtn${layout.source === "generate" ? " active" : ""}`}
-                onClick={() => updateLayout("source", "generate")}
-              >
-                Generate new
-              </button>
-              <button
-                className={`batchSourceBtn${layout.source === "load" ? " active" : ""}`}
-                onClick={() => updateLayout("source", "load")}
-              >
-                Load saved
-              </button>
-            </div>
-
-            {layout.source === "generate" && (
-              <div className="batchLayoutGrid">
-                <BatchNum label="Width"          value={layout.width}          min={5}  max={200} onChange={v => updateLayout("width", v)} />
-                <BatchNum label="Height"         value={layout.height}         min={5}  max={200} onChange={v => updateLayout("height", v)} />
-                <BatchNum label="Entries"        value={layout.entries}        min={1}  max={10}  onChange={v => updateLayout("entries", v)} />
-                <BatchNum label="Exits"          value={layout.exits}          min={1}  max={10}  onChange={v => updateLayout("exits", v)} />
-                <BatchNum label="Parking Spots"  value={layout.parking_spots}  min={1}  max={500} onChange={v => updateLayout("parking_spots", v)} />
-              </div>
-            )}
-
-            {layout.source === "load" && (
-              <div className="fieldRow">
-                <div className="fieldTop">
-                  <span className="fieldLabel">Parking Lot ID</span>
-                </div>
-                <input
-                  className="numInput"
-                  style={{ width: "100%", maxWidth: 320 }}
-                  type="text"
-                  placeholder="e.g. my-saved-lot"
-                  value={layout.parkingLotId}
-                  onChange={e => updateLayout("parkingLotId", e.target.value)}
-                />
-                {layoutError && <div className="fieldHint">{layoutError}</div>}
-              </div>
-            )}
-            {layout.source === "generate" && layoutError && (
-              <div className="fieldHint" style={{ marginTop: 8 }}>{layoutError}</div>
-            )}
-          </section>
-
           {/* Simulation Blocks */}
           {batchSims.map((sim, idx) => (
             <SimBlock
@@ -436,6 +370,46 @@ function SimBlock({
         >
           <Trash2 size={15} />
         </button>
+      </div>
+
+      {/* ── Parking Lot ── */}
+      <div className="batchSimLayoutSection">
+        <div className="fieldRow" style={{ borderTop: "none", paddingTop: 0 }}>
+          <div className="fieldTop">
+            <span className="fieldLabel"><span className="iconBadge"><Database size={14} /></span>Parking Lot</span>
+          </div>
+          <div className="batchLayoutToggle" style={{ marginBottom: 0 }}>
+            <button
+              className={`batchSourceBtn${entry.layout_source === "generate" ? " active" : ""}`}
+              onClick={() => onChange("layout_source", "generate")}
+            >Generate new</button>
+            <button
+              className={`batchSourceBtn${entry.layout_source === "load" ? " active" : ""}`}
+              onClick={() => onChange("layout_source", "load")}
+            >Load saved</button>
+          </div>
+        </div>
+        {entry.layout_source === "generate" && (
+          <div className="batchLayoutGrid">
+            <BatchNum label="Width"         value={entry.layout_width}         min={5}  max={200} onChange={v => onChange("layout_width", v)} />
+            <BatchNum label="Height"        value={entry.layout_height}        min={5}  max={200} onChange={v => onChange("layout_height", v)} />
+            <BatchNum label="Entries"       value={entry.layout_entries}       min={1}  max={10}  onChange={v => onChange("layout_entries", v)} />
+            <BatchNum label="Exits"         value={entry.layout_exits}         min={1}  max={10}  onChange={v => onChange("layout_exits", v)} />
+            <BatchNum label="Parking Spots" value={entry.layout_parking_spots} min={1}  max={500} onChange={v => onChange("layout_parking_spots", v)} />
+          </div>
+        )}
+        {entry.layout_source === "load" && (
+          <div className="fieldRow">
+            <input
+              className="numInput"
+              style={{ width: "100%", maxWidth: 280 }}
+              type="text"
+              placeholder="Parking Lot ID"
+              value={entry.layout_parking_lot_id}
+              onChange={e => onChange("layout_parking_lot_id", e.target.value)}
+            />
+          </div>
+        )}
       </div>
 
       <div className="batchFieldGrid">
