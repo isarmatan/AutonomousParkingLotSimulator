@@ -19,7 +19,7 @@ export default function Home() {
         <h1 className="homeX__title">Autonomous Parking Simulator</h1>
 
       <div className="homeX__menu" role="navigation" aria-label="Main menu">
-        <Link className="menuBtn menuBtn--primary" to="/config">
+        <Link className="menuBtn menuBtn--primary" to="/mode-select">
           <span className="menuBtn__icon" aria-hidden="true">▶</span>
           <span className="menuBtn__label">Start Simulation</span>
         </Link>

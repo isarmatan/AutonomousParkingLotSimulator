@@ -1,0 +1,424 @@
+================================================================================
+  Batch Simulation Mode — Implementation Plan
+  AutonomousParkingLotSimulator
+================================================================================
+
+--------------------------------------------------------------------------------
+1. CURRENT ARCHITECTURE SCAN
+--------------------------------------------------------------------------------
+
+FRONTEND FLOW (current):
+  Home (/)
+    → "Start Simulation" → links directly to /config
+  SimulationConfig (/config)
+    → saves config to sessionStorage["sim_config_v3"]
+    → navigates to /layout
+  Layout (/layout)
+    → user picks/generates a parking lot
+    → navigates to /simulation?layout=<id>
+  Simulation (/simulation)
+    → reads sessionStorage config
+    → if headless_mode → POST /simulation/headless, shows headlessResult panel
+    → if comparison_mode → POST /simulation/compare, shows comparisonResults panel
+    → otherwise → POST /simulation/start + WebSocket live view
+
+ROUTES (router.tsx):
+  /                → Home
+  /config          → SimulationConfig
+  /layout          → Layout
+  /layout/new      → CreateParkingLot
+  /layouts         → SavedLayouts
+  /simulation      → Simulation
+  /editor          → Editor
+  /stats           → Stats
+  /about           → About
+
+KEY BACKEND ENDPOINTS:
+  POST /simulation/start     → live simulation (WebSocket)
+  POST /simulation/headless  → request: HeadlessSimulationRequest
+                               response: HeadlessResultDTO
+  POST /simulation/compare   → request: ComparisonRequest (algorithms list)
+                               response: ComparisonResultDTO (list of HeadlessResultDTO)
+
+HeadlessSimulationRequest fields:
+  source, width, height, rules, parkingLotId
+  planning_horizon, goal_reserve_horizon, arrival_lambda, exit_rate
+  initial_cars, max_arriving_cars, algorithm, max_steps
+
+HeadlessResultDTO fields (the stats object):
+  mode, algorithm, max_steps, completed_steps, stopped_reason, status
+  grid_width, grid_height, parking_lot_id
+  initial_cars_configured, max_arriving_cars_configured
+  total_cars, total_parked, total_failed_plans, total_exited
+  arriving_cars_spawned, arriving_cars_parked
+  average_steps_to_park, average_steps_to_exit
+  avg_trip_duration_steps, max_trip_duration_steps, min_trip_duration_steps,
+  total_completed_trips
+  avg_planner_ms, max_planner_ms, planner_call_count
+  cpu_usage_avg_percent, cpu_usage_peak_percent
+  memory_usage_avg_mb, memory_usage_peak_mb
+  machine_specs
+
+SimulationConfig TS type:
+  planning_horizon, goal_reserve_horizon, arrival_lambda, exit_rate,
+  initial_cars, max_timesteps, step_delay_ms, algorithm,
+  headless_mode, comparison_mode, comparison_algorithms
+
+NOTE: step_delay_ms, headless_mode, comparison_mode, comparison_algorithms are
+      frontend-only fields (not in HeadlessSimulationRequest).
+
+
+--------------------------------------------------------------------------------
+2. FRONTEND DESIGN
+--------------------------------------------------------------------------------
+
+--- 2a. New "Mode Select" page ---
+
+Route:  /mode-select
+File:   frontend/src/pages/SimulationModeSelect.tsx
+
+Content: Two large cards:
+  Card 1 — "Normal Simulation"
+    Description: Run a single simulation with live, headless, or comparison mode.
+    Button: Continue → navigates to /config  (existing flow, unchanged)
+
+  Card 2 — "Batch Simulation"
+    Description: Run multiple independent simulations headlessly and compare results.
+    Button: Continue → navigates to /batch-config
+
+Home.tsx change:
+  "Start Simulation" link:  to="/config"  →  to="/mode-select"
+
+--- 2b. New Batch Config page ---
+
+Route:  /batch-config
+File:   frontend/src/pages/BatchSimulationConfig.tsx
+Style:  frontend/src/pages/BatchSimulationConfig.css
+
+The page contains a list of simulation config "blocks":
+  - Starts with 1 block.
+  - Each block is labeled "Simulation 1", "Simulation 2", etc.
+  - Each block has the same fields as SimulationConfig EXCEPT:
+      EXCLUDED: headless_mode (always true internally)
+      EXCLUDED: step_delay_ms (irrelevant for headless)
+      EXCLUDED: comparison_mode
+      EXCLUDED: comparison_algorithms
+      INCLUDED: max_timesteps (required ≥ 1 for headless; validated)
+  - Each block has a ✕ "Delete" button (disabled when only 1 block remains).
+  - Below all blocks: "＋ Add Simulation" button (disabled at 20 blocks).
+  - At the bottom: "Run Batch" button.
+
+Shared config fields per block (TypeScript type: BatchSimEntry):
+  {
+    id: string (uuid, client-side only),
+    algorithm: string,
+    planning_horizon: number,
+    goal_reserve_horizon: number,
+    arrival_lambda: number,
+    exit_rate: number,
+    initial_cars: number,
+    max_arriving_cars: number,
+    max_timesteps: number,    ← required ≥ 1
+    source: "generate" | "load",
+    layout_id?: string,        ← picked from a layout selector or the shared layout
+  }
+
+LAYOUT STRATEGY for batch mode:
+  All batch simulations share the same parking lot layout (chosen before
+  running). This mirrors comparison mode's approach and avoids a complex
+  per-simulation layout picker.
+  Flow: /batch-config → user configures N sims → clicks "Choose Layout & Run"
+        → navigates to /layout?batch=1 (passing flag indicating batch mode)
+        → Layout page detects batch flag → "Start Simulation" →
+          navigates to /batch-results (new results page)
+
+  OR (simpler, preferred): batch-config page includes an inline "layout source"
+  section (generate or load from saved) so the user picks layout once for
+  all simulations on the same screen.
+
+PREFERRED APPROACH: Keep /batch-config self-contained with a layout source
+section. No need to navigate through /layout for batch mode.
+
+--- 2c. Batch Results page ---
+
+Route:   /batch-results (rendered inline on /batch-config after run, OR separate page)
+Preferred: Show results inline on the batch-config page (replace the config blocks
+           with results after run completes). This avoids navigation state issues.
+
+Results layout:
+  - Summary banner: "Batch Complete — N/M simulations successful"
+  - Per-simulation result cards (or table), each showing:
+      Header: "Simulation N" · algorithm badge · status badge
+      Stats grid (same stat cards as the headless panel in Simulation.tsx):
+        Exited, Arrivals Parked, Failures, Avg Trip, Trip Range,
+        Avg Planner ms, CPU, Memory
+  - "Run Again" button (goes back to config state)
+  - "Export to CSV" button (optional, nice to have)
+
+Per-simulation execution state (shown during run):
+  Each block transitions through states:
+    ⟳ pending  →  ⏳ running  →  ✓ success  |  ✗ failed
+  This is possible because the frontend calls /simulation/headless N times
+  sequentially — see Section 3.
+
+--- 2d. Reuse strategy for config fields ---
+
+The config form fields from SimulationConfig.tsx will be extracted into a
+small reusable component: SingleSimConfigForm (or inline hook).
+
+Approach: Extract the FieldRow/SelectRow/ToggleRow field groups into a
+  shared functional component that takes:
+    props: { config: BatchSimEntry, onChange: (field, value) => void }
+  This component is used both in SimulationConfig.tsx and
+  in each block of BatchSimulationConfig.tsx.
+
+  Alternatively (simpler, less refactor risk): simply duplicate the field
+  JSX inside BatchSimulationConfig since SimulationConfig.tsx already has
+  comparison/headless toggles that batch mode must not show anyway.
+  This is safer and avoids touching the working SimulationConfig.tsx.
+
+DECISION: Duplicate fields in BatchSimulationConfig to avoid touching
+  the existing SimulationConfig.tsx at all. Risk of UI divergence is low
+  since the batch config UI is intentionally simpler.
+
+
+--------------------------------------------------------------------------------
+3. BACKEND DESIGN
+--------------------------------------------------------------------------------
+
+--- 3a. Execution strategy: Frontend-orchestrated sequential calls ---
+
+RECOMMENDATION: Do NOT add a new backend batch endpoint.
+Instead, the frontend calls POST /simulation/headless N times in sequence.
+
+Rationale:
+  1. Per-simulation progress (running/done/error) is naturally shown as each
+     call completes — no SSE or streaming needed.
+  2. No risk of HTTP timeout on a long-running batch.
+  3. No new backend code to test or maintain.
+  4. Each call is fully independent (no shared state, no parallel mutations).
+  5. The backend already handles all algorithms including LNS2/LaCAM0.
+  6. One failed simulation does NOT affect the others.
+
+Sequential execution pseudocode (frontend):
+  for (const sim of batchSims) {
+    setSimStatus(sim.id, "running");
+    try {
+      const result = await fetch("/simulation/headless", { body: buildRequest(sim, layout) });
+      setSimResult(sim.id, await result.json());
+      setSimStatus(sim.id, "success");
+    } catch (err) {
+      setSimStatus(sim.id, "failed");
+      setSimError(sim.id, err.message);
+    }
+  }
+
+OPTIONAL backend batch endpoint (Phase 2, after approval):
+  POST /simulation/batch
+  Request:  BatchSimulationRequest { simulations: List[HeadlessSimulationRequest] }
+  Response: BatchResultDTO { results: List[BatchSimResultItemDTO] }
+
+  BatchSimResultItemDTO:
+    index: int
+    status: "success" | "failed"
+    algorithm: str
+    max_steps: int
+    result?: HeadlessResultDTO
+    error?: str
+
+  This would be a thin wrapper that loops over simulations and calls
+  _build_and_run_headless() for each, catching exceptions per-simulation.
+  Run sequentially (not parallel) to avoid concurrent mutable state in
+  simulation cores.
+
+  For now, the frontend-sequential approach is used. The batch endpoint
+  can be added in Phase 2 if backend orchestration is preferred.
+
+
+--------------------------------------------------------------------------------
+4. DTO DESIGN
+--------------------------------------------------------------------------------
+
+No new DTOs are needed for Phase 1 (frontend-sequential approach).
+The existing HeadlessSimulationRequest and HeadlessResultDTO are reused.
+
+Frontend-only type:
+  type BatchSimEntry = {
+    id: string;                  // client uuid
+    algorithm: string;
+    planning_horizon: number;
+    goal_reserve_horizon: number;
+    arrival_lambda: number;
+    exit_rate: number;
+    initial_cars: number;
+    max_arriving_cars: number;
+    max_timesteps: number;       // required ≥ 1 for headless
+  }
+
+  type BatchSimStatus = "pending" | "running" | "success" | "failed";
+
+  type BatchSimState = {
+    entry: BatchSimEntry;
+    status: BatchSimStatus;
+    result?: HeadlessResult;     // HeadlessResultDTO equivalent
+    error?: string;
+  }
+
+If backend batch endpoint is added (Phase 2):
+  class BatchSimulationRequest(BaseModel):
+    simulations: List[HeadlessSimulationRequest]   # max 20
+
+  class BatchSimResultItemDTO(BaseModel):
+    index: int
+    status: Literal["success", "failed"]
+    algorithm: str
+    max_steps: int
+    result: Optional[HeadlessResultDTO] = None
+    error: Optional[str] = None
+
+  class BatchResultDTO(BaseModel):
+    results: List[BatchSimResultItemDTO]
+
+
+--------------------------------------------------------------------------------
+5. SOLVER INTEGRATION
+--------------------------------------------------------------------------------
+
+Batch mode uses exactly the same backend flow as single headless mode:
+  _build_and_run_headless() is called for each simulation.
+  Each call creates fresh instances of:
+    Grid, ParkingManager, GhostExitManager (for lacam0/lns2),
+    SimulationCore / LaCAM0SimulationCore / LNS2SimulationCore.
+  Zero shared state between batch simulations.
+  Supports: priority, lacam0, lns2 — all currently working algorithms.
+
+
+--------------------------------------------------------------------------------
+6. SAFETY AND COMPATIBILITY
+--------------------------------------------------------------------------------
+
+  ✓ Home.tsx changes only the /config link → /mode-select. Nothing else changes.
+  ✓ SimulationConfig.tsx is NOT modified.
+  ✓ SimulationRouter (existing endpoints) is NOT modified.
+  ✓ Comparison mode is NOT touched.
+  ✓ LaCAM0 and LNS2 integrations are NOT touched.
+  ✓ Existing simulation DTOs are NOT modified.
+  ✓ sessionStorage "sim_config_v3" key is NOT touched (used only by normal mode).
+  ✓ Batch state is kept entirely in React component state (no sessionStorage
+    pollution).
+
+
+--------------------------------------------------------------------------------
+7. FILES TO ADD/MODIFY
+--------------------------------------------------------------------------------
+
+ADD (new files):
+  frontend/src/pages/SimulationModeSelect.tsx    mode selection page
+  frontend/src/pages/SimulationModeSelect.css    styles
+  frontend/src/pages/BatchSimulationConfig.tsx   batch config + results page
+  frontend/src/pages/BatchSimulationConfig.css   styles
+
+MODIFY (minimal, safe):
+  frontend/src/pages/Home.tsx
+    - Change "Start Simulation" link: to="/config" → to="/mode-select"
+    - ONE LINE change.
+
+  frontend/src/router.tsx
+    - Import SimulationModeSelect and BatchSimulationConfig
+    - Add <Route path="/mode-select" element={<SimulationModeSelect />} />
+    - Add <Route path="/batch-config" element={<BatchSimulationConfig />} />
+    - THREE line changes (2 imports + 2 route entries).
+
+  (Optional Phase 2) backend/simulation_api/simulation_dtos.py
+    - Add BatchSimulationRequest, BatchSimResultItemDTO, BatchResultDTO
+
+  (Optional Phase 2) backend/simulation_api/simulation_router.py
+    - Add POST /simulation/batch endpoint
+
+NO CHANGES to:
+  SimulationConfig.tsx, Simulation.tsx, lacam0_*, lns2_*, priority planner.
+
+
+--------------------------------------------------------------------------------
+8. TESTING CHECKLIST
+--------------------------------------------------------------------------------
+
+Normal simulation regression:
+  [ ] Home → "Start Simulation" → /mode-select → "Normal Simulation" → /config
+      → behaves exactly as before
+  [ ] Live simulation still works
+  [ ] Headless mode still works
+  [ ] Comparison mode still works
+
+Batch mode:
+  [ ] Home → "Batch Simulation" → /batch-config opens correctly
+  [ ] Default: 1 simulation block pre-populated
+  [ ] Add simulation: up to 20 blocks, "Add" button disabled at 20
+  [ ] Delete simulation: block removed, counter re-labels correctly
+  [ ] Delete when only 1 block: delete button is disabled
+  [ ] Validation: max_timesteps = 0 in any block → Run disabled with clear hint
+  [ ] Run with 1 simulation: priority planner, shows result card
+  [ ] Run with 3 simulations: different algorithms, shows 3 result cards
+  [ ] Run with lacam0: shows result
+  [ ] Run with lns2: shows result
+  [ ] Per-simulation status: each block shows pending → running → success/failed
+  [ ] Failed simulation (e.g. invalid config): shows error per that sim only,
+      other sims still show results
+  [ ] Results panel: all stat fields populated correctly
+  [ ] "Run Again" resets to config state
+
+
+--------------------------------------------------------------------------------
+9. STEP-BY-STEP IMPLEMENTATION PHASES
+--------------------------------------------------------------------------------
+
+PHASE 1 — Mode Select page + routing
+  1.1  Create SimulationModeSelect.tsx + CSS
+       - Two cards: "Normal Simulation" (→/config) and "Batch Simulation" (→/batch-config)
+  1.2  Modify Home.tsx: change link to="/mode-select"
+  1.3  Modify router.tsx: add /mode-select route
+  1.4  Test: normal flow still works via /mode-select → /config → unchanged
+
+PHASE 2 — Batch Config page (config blocks only, no run yet)
+  2.1  Create BatchSimulationConfig.tsx with state management:
+       - List of BatchSimEntry objects
+       - Add/delete block functionality
+       - Per-block form (all fields, no headless/comparison toggles)
+       - Validation: max_timesteps ≥ 1 for each block
+       - Layout source section (generate or load, one shared layout for all)
+  2.2  Create BatchSimulationConfig.css
+  2.3  Modify router.tsx: add /batch-config route
+  2.4  Test: add/delete blocks, validation, navigation
+
+PHASE 3 — Batch execution + results display
+  3.1  Add run logic: sequential /simulation/headless calls
+  3.2  Per-simulation status display (pending/running/success/failed)
+  3.3  Results panel: stat cards per simulation
+  3.4  "Run Again" button
+  3.5  Test: run 1-3 simulations, check all stats populated
+
+PHASE 4 (Optional) — Backend batch endpoint
+  4.1  Add BatchSimulationRequest, BatchSimResultItemDTO, BatchResultDTO to dtos
+  4.2  Add POST /simulation/batch endpoint (calls _build_and_run_headless loop)
+  4.3  Switch frontend to use backend batch endpoint (optional toggle)
+
+
+--------------------------------------------------------------------------------
+SUMMARY: WHAT IS NOT CHANGING
+--------------------------------------------------------------------------------
+
+Nothing in the following is modified:
+  - SimulationConfig.tsx (existing normal simulation config)
+  - Simulation.tsx (existing simulation + headless + comparison views)
+  - All backend endpoints (/start, /headless, /compare)
+  - LaCAM0 integration
+  - LNS2 integration
+  - Priority planner
+  - sessionStorage sim_config_v3 flow
+  - Stats dashboard
+  - Editor
+  - Saved layouts
+
+================================================================================
+END OF PLAN
+================================================================================

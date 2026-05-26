@@ -1,6 +1,8 @@
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 import Home from "./pages/Home";
 import SimulationConfig from "./pages/SimulationConfig";
+import SimulationModeSelect from "./pages/SimulationModeSelect";
+import BatchSimulationConfig from "./pages/BatchSimulationConfig";
 import Editor from "./pages/Editor";
 import Simulation from "./pages/Simulation";
 import Stats from "./pages/Stats";
@@ -14,6 +16,8 @@ export default function AppRouter() {
     <BrowserRouter>
       <Routes>
         <Route path="/" element={<Home />} />
+        <Route path="/mode-select" element={<SimulationModeSelect />} />
+        <Route path="/batch-config" element={<BatchSimulationConfig />} />
         <Route path="/config" element={<SimulationConfig />} />
         <Route path="/editor" element={<Editor />} />
         <Route path="/simulation" element={<Simulation />} />

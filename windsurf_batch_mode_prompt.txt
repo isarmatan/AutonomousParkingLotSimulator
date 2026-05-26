@@ -1,0 +1,217 @@
+Windsurf Task: Design and Implement Batch Simulation Mode
+
+Context
+-------
+Project: AutonomousParkingLotSimulator
+
+The project already supports:
+1. Normal simulation mode.
+2. Headless simulation mode.
+3. Comparison mode, where multiple algorithms run on the same configuration.
+4. Priority Planner.
+5. LaCAM0 integration.
+6. LNS2 integration.
+7. Lifelong simulation architecture.
+
+I now want to add a new feature: Batch Simulation Mode.
+
+Important distinction:
+Batch mode is NOT the same as comparison mode.
+
+Comparison mode:
+- Uses one shared simulation configuration.
+- Runs multiple algorithms or planner options on that same configuration.
+
+Batch mode:
+- Contains multiple different simulation configurations.
+- Each configuration is solved independently.
+- It runs headless only.
+- No 2D or 3D simulation visualization should be displayed.
+- Only final results/statistics should be displayed.
+
+Main UX Flow
+------------
+Currently, when the user presses "Start Simulation" from the homepage, it likely redirects directly into the simulation configuration / simulation page.
+
+Change this flow:
+When the user presses "Start Simulation" on the homepage, redirect to a new selection page first.
+
+This page should ask the user to choose between:
+
+1. Normal Simulation Mode
+   - This should preserve the existing flow.
+   - It includes the already implemented options:
+     - Regular simulation run.
+     - Headless mode.
+     - Comparison mode.
+   - Do not break or redesign the existing normal simulation flow unnecessarily.
+
+2. Batch Simulation Mode
+   - New flow.
+   - Allows the user to configure multiple different simulations.
+   - Always runs headless only.
+   - No comparison options should appear inside batch mode.
+
+Batch Mode Screen Requirements
+------------------------------
+If the user chooses Batch Simulation Mode, open a new batch configuration screen.
+
+The screen should allow the user to configure a simulation using the same/similar fields as the normal simulation configuration, but with these differences:
+
+1. Exclude all comparison-mode options.
+2. Force headless mode internally.
+3. Do not show visualization-specific options unless they are still required by the backend.
+4. The user should be able to configure one simulation first.
+5. Below that configuration, show an "Add Simulation" button.
+6. When clicked, a new simulation configuration block is added below the previous one.
+7. The user can continue adding simulations up to a maximum of 20.
+8. Each simulation block must be deletable.
+9. The UI should clearly label simulations, for example:
+   - Simulation 1
+   - Simulation 2
+   - Simulation 3
+10. The user should be able to edit each configuration independently.
+11. The user should not be able to run an invalid batch.
+12. A batch must contain at least 1 simulation.
+13. Maximum batch size is 20 simulations.
+14. The Run Simulation button should run all configured simulations.
+
+Execution Behavior
+------------------
+When the user presses "Run Simulation" in batch mode:
+
+1. Each simulation configuration should be solved independently.
+2. Each simulation should run in headless mode.
+3. Each simulation should produce its own statistics result.
+4. The UI should show per-simulation progress.
+5. While a simulation is running, show a loading spinner or clear loading state.
+6. When a simulation finishes, show either:
+   - A green checkmark, or
+   - The result immediately if that makes more sense architecturally.
+7. If a simulation fails, show a clear error state for that specific simulation only.
+8. One failed simulation should not necessarily hide results from successful simulations.
+9. The final screen should allow the user to see the statistics for each simulation.
+
+Preferred result display:
+- A table or card layout showing each simulation and its statistics.
+- The user should be able to compare results manually across different configurations.
+- Each result should identify which configuration it belongs to.
+
+Possible statistics to display, depending on what already exists:
+- Number of exited cars.
+- Average exit steps.
+- Number of spawned cars.
+- Number of parked cars.
+- Average arrival steps.
+- Total time steps.
+- Failures.
+- Average total trip duration.
+- Longest trip duration.
+- Shortest trip duration.
+- Average planner runtime.
+- CPU usage, if already implemented.
+- Memory usage, if already implemented.
+- Algorithm/planner used.
+- Simulation max steps.
+- Initial number of cars.
+- Entry pace.
+- Exit pace.
+
+Implementation Instructions
+---------------------------
+Please first create a detailed implementation plan before coding.
+
+The plan should include:
+
+1. Current project scan
+   - Identify the homepage Start Simulation flow.
+   - Identify current normal simulation configuration components.
+   - Identify current headless mode implementation.
+   - Identify current comparison mode implementation.
+   - Identify current backend endpoints used to start simulations.
+   - Identify the current statistics response format.
+
+2. Frontend design
+   - New route/page for choosing simulation mode:
+     - Normal Simulation Mode
+     - Batch Simulation Mode
+   - New batch configuration page/component.
+   - How to reuse existing simulation configuration UI safely.
+   - How to exclude comparison options.
+   - How to force headless mode.
+   - How to add/delete simulation configuration blocks.
+   - How to validate min/max simulations.
+   - How to show progress per simulation.
+   - How to show results per simulation.
+
+3. Backend design
+   - Decide whether to create a new batch endpoint or call the existing headless endpoint multiple times from the frontend.
+   - Preferred: create a clean backend batch endpoint if this fits the current architecture.
+   - The endpoint should accept a list of simulation configurations.
+   - The backend should solve each configuration independently.
+   - The backend should return a list of per-simulation results.
+   - Consider whether simulations should run sequentially or in parallel.
+   - Start with the safer approach unless there is already infrastructure for parallel execution.
+
+4. Data model / DTO design
+   - Define the batch request structure.
+   - Define the batch response structure.
+   - Each simulation result should include:
+     - batchSimulationId or index.
+     - status: success / failed.
+     - statistics if successful.
+     - error message if failed.
+     - original important configuration fields for identification.
+
+5. Solver integration
+   - Batch mode should support the same planners already supported by normal/headless mode, such as:
+     - Priority Planner.
+     - LaCAM0.
+     - LNS2.
+   - Do not create shared mutable state between batch simulations.
+   - Each simulation should create its own core/manager/planner instance as needed.
+   - Avoid reusing stateful simulation objects across batch runs.
+
+6. Safety and compatibility
+   - Do not break normal simulation mode.
+   - Do not break headless mode.
+   - Do not break comparison mode.
+   - Do not break LaCAM0 integration.
+   - Do not break LNS2 integration.
+   - Keep batch mode isolated where reasonable.
+   - Reuse existing utilities only when safe, for example config types, validators, map/scenario generation helpers, or statistics formatting.
+   - Avoid reusing simulation cores/managers in a way that could cause shared-state bugs.
+
+7. Testing plan
+   - Test normal simulation mode still works.
+   - Test existing headless mode still works.
+   - Test existing comparison mode still works.
+   - Test batch with 1 simulation.
+   - Test batch with 2-3 simulations using different configs.
+   - Test batch with max 20 simulations.
+   - Test deleting simulation blocks.
+   - Test validation when no simulations exist.
+   - Test invalid configuration in one simulation.
+   - Test planner options including Priority Planner, LaCAM0, and LNS2 if available.
+   - Test backend errors are displayed per simulation.
+
+Important Requirements
+----------------------
+1. First output a plan as a txt/markdown file before implementing.
+2. Wait for my approval before implementation if the changes are large.
+3. After approval, implement incrementally.
+4. Keep the implementation modular.
+5. Do not mix batch mode with comparison mode.
+6. Batch mode must always be headless.
+7. Maximum number of simulations in a batch is 20.
+8. Each simulation configuration can be deleted.
+9. Each simulation result/statistics must be visible to the user.
+10. Keep existing functionality stable.
+
+Expected Deliverables
+---------------------
+1. A written implementation plan.
+2. List of files/components/classes/endpoints that need to be created or changed.
+3. Explanation of whether backend batch execution should be sequential or parallel at first.
+4. After approval, implementation of the feature.
+5. Basic manual test checklist.
