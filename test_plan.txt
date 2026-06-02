@@ -1,0 +1,451 @@
+================================================================================
+  AUTONOMOUS PARKING LOT SIMULATOR — TEST PLAN
+================================================================================
+
+PHASE 1 — BACKEND UNIT TESTS  (pytest)
+────────────────────────────────────────────────────────────────────────────────
+
+  [ SIMULATION CORE ]
+
+UT-01  Parking lot generation — valid dimensions
+  Input : width=20, height=20, num_entries=1, num_exits=1, num_parking_spots=20
+  Expect: lot object created, spot count == 20, no exceptions
+
+UT-02  Parking lot generation — minimum size
+  Input : width=5, height=5, num_entries=1, num_exits=1, num_parking_spots=1
+  Expect: lot created successfully
+
+UT-03  Parking lot generation — invalid dimensions
+  Input : width=2, height=2  (below minimum)
+  Expect: ValueError or HTTPException raised
+
+UT-04  Headless runner — simulation reaches max_steps
+  Input : max_steps=50, small lot, arrival_lambda=0.0 (no cars arrive)
+  Expect: completed_steps == 50, stopped_reason == "max_steps_reached"
+
+UT-05  Headless runner — simulation stops early (all cars done)
+  Input : max_steps=5000, initial_cars=2, arrival_lambda=0.0, exit_rate=1.0
+  Expect: stopped_reason != "max_steps_reached", completed_steps < 5000
+
+UT-06  Algorithm selection — Priority Planner
+  Input : algorithm="priority"
+  Expect: correct solver class instantiated, result.algorithm == "priority"
+
+UT-07  Algorithm selection — LaCAM0
+  Input : algorithm="lacam0"
+  Expect: correct solver class instantiated, result.algorithm == "lacam0"
+
+UT-08  Algorithm selection — MAPF-LNS2
+  Input : algorithm="lns2"
+  Expect: correct solver class instantiated, result.algorithm == "lns2"
+
+UT-09  Algorithm selection — unknown string
+  Input : algorithm="bogus"
+  Expect: HTTPException 422 or ValueError raised
+
+UT-10  HeadlessResultDTO — stats are non-negative
+  Input : any valid run
+  Expect: total_exited >= 0, total_failed_plans >= 0, avg_planner_ms >= 0
+
+  ─────────────────────────────────────────────────────────────────────────────
+
+  [ GRID VALIDATOR ]
+
+UT-11  validate_basic_constraints — ENTRY on boundary edge (valid)
+  Setup : 10×10 grid, ENTRY placed at (0, 5) (left edge, not corner)
+  Expect: no issues returned
+
+UT-12  validate_basic_constraints — ENTRY on interior cell (invalid)
+  Setup : 10×10 grid, ENTRY placed at (4, 4)
+  Expect: one issue: "ENTRY at (4,4) is not on a valid boundary cell"
+
+UT-13  validate_basic_constraints — ENTRY on corner (invalid)
+  Setup : 10×10 grid, ENTRY placed at (0, 0)
+  Expect: one issue: boundary non-corner violation
+
+UT-14  validate_basic_constraints — PARKING on boundary (invalid)
+  Setup : 10×10 grid, PARKING placed at (0, 3)
+  Expect: one issue: "PARKING at (0,3) cannot be on grid boundary"
+
+UT-15  validate_basic_constraints — no ENTRY present
+  Setup : valid grid with EXIT and PARKING but no ENTRY
+  Expect: one issue: "Grid must contain at least one ENTRY"
+
+UT-16  validate_basic_constraints — no EXIT present
+  Setup : valid grid with ENTRY and PARKING but no EXIT
+  Expect: one issue: "Grid must contain at least one EXIT"
+
+UT-17  validate_basic_constraints — no PARKING present
+  Setup : grid with ENTRY and EXIT only
+  Expect: one issue: "Grid must contain at least one PARKING spot"
+
+UT-18  validate_basic_constraints — duplicate parking IDs
+  Setup : two PARKING cells, both with metadata parking_id="P1"
+  Expect: one issue: "Duplicate PARKING id 'P1'"
+
+UT-19  validate_connectivity — isolated parking spot (not road-connected)
+  Setup : valid grid, parking spot placed in a WALL island with no road adjacent
+  Expect: one connectivity issue referencing that spot's coordinates
+
+UT-20  validate_connectivity — fully connected valid grid
+  Setup : generate a standard lot with all cells road-connected
+  Expect: no connectivity issues
+
+  ─────────────────────────────────────────────────────────────────────────────
+
+  [ EDITOR CONTROLLER ]
+
+UT-21  place_entry — on boundary non-corner → success
+  Input : grid 10×10, place_entry(0, 5)
+  Expect: cell (0,5) becomes ENTRY, no exception
+
+UT-22  place_entry — on interior cell → InvalidPlacementError
+  Input : grid 10×10, place_entry(5, 5)
+  Expect: InvalidPlacementError raised
+
+UT-23  place_entry — on corner cell → InvalidPlacementError
+  Input : grid 10×10, place_entry(0, 0)
+  Expect: InvalidPlacementError raised
+
+UT-24  place_exit — on boundary non-corner → success
+  Input : grid 10×10, place_exit(9, 4)
+  Expect: cell (9,4) becomes EXIT, no exception
+
+UT-25  place_exit — on corner → InvalidPlacementError
+  Input : grid 10×10, place_exit(9, 9)
+  Expect: InvalidPlacementError raised
+
+UT-26  place_parking — on WALL cell → InvalidPlacementError
+  Input : WALL cell at (3, 3), place_parking(3, 3)
+  Expect: InvalidPlacementError: "Cannot place PARKING on WALL"
+
+UT-27  place_parking — on already PARKING cell → InvalidPlacementError
+  Input : existing PARKING at (3, 3), place_parking(3, 3) again
+  Expect: InvalidPlacementError: "Cell is already a PARKING spot"
+
+UT-28  place_parking — on ROAD, no ID given → auto-generates ID
+  Input : ROAD cell at (3, 3), place_parking(3, 3, parking_id=None)
+  Expect: cell type == PARKING, metadata["parking_id"] == "P1" (or sequential)
+
+UT-29  paint_cell — WALL → PARKING → InvalidPlacementError
+  Input : cell at (1, 1) is WALL, paint_cell(1, 1, PARKING)
+  Expect: InvalidPlacementError raised
+
+UT-30  paint_cell — ROAD → WALL → success
+  Input : cell at (3, 3) is ROAD, paint_cell(3, 3, WALL)
+  Expect: cell type == WALL, no exception
+
+UT-31  clear_cell — any cell type → becomes ROAD
+  Input : cell at (2, 2) is PARKING, clear_cell(2, 2)
+  Expect: cell type == ROAD, metadata == {}
+
+UT-32  out-of-bounds action → OutOfBoundsError
+  Input : grid 10×10, place_entry(15, 0)
+  Expect: OutOfBoundsError raised
+
+
+PHASE 2 — FRONTEND UNIT TESTS  (Vitest + React Testing Library)
+────────────────────────────────────────────────────────────────────────────────
+
+  [ BATCH SIMULATION ]
+
+FE-01  BatchSimulationConfig — initial state
+  Expect: 1 simulation block rendered, Add button visible, Run button enabled
+          (generate defaults are all valid)
+
+FE-02  BatchSimulationConfig — add simulations
+  Action : click "Add Simulation" 3 times
+  Expect: 4 blocks visible, counter badge shows "4 / 20"
+
+FE-03  BatchSimulationConfig — max limit enforced
+  Action : click "Add Simulation" until 20 blocks
+  Expect: Add button disappears, "Maximum of 20 simulations reached" note shown
+
+FE-04  BatchSimulationConfig — delete simulation
+  Setup : 2 blocks; delete block 1
+  Expect: 1 block remains, its delete button is disabled
+
+FE-05  Validation — max_timesteps = 0 blocks run button
+  Action : set max_timesteps to 0 in block 1
+  Expect: Run button disabled, error hint shown in block 1
+
+FE-06  Validation — "Load saved" with empty ID blocks run button
+  Action : switch layout source to "Load saved", leave Parking Lot ID blank
+  Expect: Run button disabled, error hint in that block
+
+FE-07  Validation — valid load ID re-enables run button
+  Action : type "my-lot" in Parking Lot ID field
+  Expect: Run button enabled (assuming timesteps valid)
+
+FE-08  Per-simulation layout — configs are independent
+  Setup : 2 blocks; block 1 = Generate 20×20, block 2 = Load "lot-abc"
+  Expect: changing block 1 does not affect block 2's state
+
+FE-09  SimResultCard — save flow (mock success)
+  Setup : mock 200 from /simulation/headless/save
+  Action : click "Save Result" → type name → click Save
+  Expect: "Saved to history" badge shown, save button gone
+
+FE-10  SimResultCard — save flow (mock failure)
+  Setup : mock 500 from /simulation/headless/save
+  Action : click "Save Result" → click Save
+  Expect: red error message shown, input row still visible for retry
+
+  ─────────────────────────────────────────────────────────────────────────────
+
+  [ EDITOR PAGE ]
+
+FE-11  Editor — save dialog requires non-empty name
+  Action : open save dialog, leave name blank, click Save
+  Expect: save is not submitted / button stays disabled or error shown
+
+FE-12  Editor — tool selection updates active tool state
+  Action : click "Parking" tool
+  Expect: "Parking" tool marked as selected, other tools deselected
+
+FE-13  SavedLayouts — search filters by name
+  Setup : 3 layouts: "Main Lot", "Side Lot", "Overflow"
+  Action : type "side" in search box
+  Expect: only "Side Lot" shown, count reads "1 layouts"
+
+FE-14  SavedLayouts — empty state shown when no layouts
+  Setup : mock empty list from /editor/saved
+  Expect: layout grid is empty, count reads "0 layouts"
+
+
+PHASE 3 — API INTEGRATION TESTS  (pytest + httpx / requests)
+────────────────────────────────────────────────────────────────────────────────
+
+  [ SIMULATION ENDPOINTS ]
+
+IT-01  POST /simulation/headless — generate source, priority planner
+  Input : { source:"generate", width:20, height:20,
+            rules:{num_entries:1, num_exits:1, num_parking_spots:20},
+            algorithm:"priority", max_steps:100,
+            initial_cars:5, arrival_lambda:0.3, exit_rate:0.02,
+            planning_horizon:50, goal_reserve_horizon:200, max_arriving_cars:0 }
+  Expect: HTTP 200, completed_steps present, algorithm=="priority",
+          grid_width==20, grid_height==20
+
+IT-02  POST /simulation/headless — lacam0 algorithm
+  Input : same as IT-01 but algorithm:"lacam0"
+  Expect: HTTP 200, result.algorithm == "lacam0"
+
+IT-03  POST /simulation/headless — missing required field
+  Input : {} (empty body)
+  Expect: HTTP 422, validation error in response body
+
+IT-04  POST /simulation/headless — max_steps=1 (edge case)
+  Input : max_steps:1, valid generate layout
+  Expect: HTTP 200, completed_steps == 1
+
+IT-05  POST /simulation/headless — load source with valid lot ID
+  Pre-condition: a lot was previously saved with known ID
+  Input : { source:"load", parkingLotId:"<id>", algorithm:"priority", ... }
+  Expect: HTTP 200, grid_width and grid_height match saved lot
+
+IT-06  POST /simulation/headless/save — persist a result
+  Pre-condition: run IT-01, store JSON response
+  Input : { name:"Test Run A", result:<IT-01 response> }
+  Expect: HTTP 200, returned object has name=="Test Run A"
+
+IT-07  POST /simulation/compare — compare two algorithms
+  Input : two configs (priority vs lacam0) on same generate source
+  Expect: HTTP 200, both algorithm results present in response
+
+IT-08  POST /simulation/headless — lns2 algorithm
+  Input : same as IT-01 but algorithm:"lns2"
+  Expect: HTTP 200, result.algorithm == "lns2"
+
+  ─────────────────────────────────────────────────────────────────────────────
+
+  [ EDITOR ENDPOINTS ]
+
+IT-09  POST /editor/drafts — blank source
+  Input : { source:"blank", width:15, height:15 }
+  Expect: HTTP 200, draftId returned, grid.width==15, grid.height==15
+
+IT-10  POST /editor/drafts — generate source
+  Input : { source:"generate", width:20, height:20,
+            rules:{num_entries:1, num_exits:1, num_parking_spots:10} }
+  Expect: HTTP 200, draftId returned, grid has ENTRY/EXIT/PARKING cells
+
+IT-11  POST /editor/drafts — blank source missing dimensions
+  Input : { source:"blank" }  (no width/height)
+  Expect: HTTP 422, code:"MISSING_DIMENSIONS"
+
+IT-12  POST /editor/drafts — load source with unknown lot ID
+  Input : { source:"load", parkingLotId:"does-not-exist" }
+  Expect: HTTP 404, code:"PARKING_LOT_NOT_FOUND"
+
+IT-13  POST /editor/drafts/{id}/actions:apply — PLACE_ENTRY on boundary
+  Setup : create blank draft, pick a boundary non-corner cell
+  Input : { action:{type:"PLACE_ENTRY", x:0, y:7}, dryRun:false }
+  Expect: ok:true, returned grid has ENTRY at (0,7)
+
+IT-14  POST /editor/drafts/{id}/actions:apply — PLACE_ENTRY on interior
+  Setup : create blank 15×15 draft
+  Input : { action:{type:"PLACE_ENTRY", x:5, y:5}, dryRun:false }
+  Expect: ok:false, error.code contains "INVALIDPLACEMENT"
+
+IT-15  POST /editor/drafts/{id}/actions:apply — PLACE_ENTRY on corner
+  Input : { action:{type:"PLACE_ENTRY", x:0, y:0}, dryRun:false }
+  Expect: ok:false, error message mentions boundary/corner
+
+IT-16  POST /editor/drafts/{id}/actions:apply — PLACE_PARKING on WALL
+  Setup : blank draft (boundary cells are WALL)
+  Input : { action:{type:"PLACE_PARKING", x:0, y:3}, dryRun:false }
+  Expect: ok:false, error.code contains "INVALIDPLACEMENT"
+
+IT-17  POST /editor/drafts/{id}/actions:apply — out-of-bounds coordinates
+  Input : { action:{type:"PLACE_ENTRY", x:999, y:999}, dryRun:false }
+  Expect: ok:false, error.code contains "OUTOFBOUNDS"
+
+IT-18  POST /editor/drafts/{id}/actions:apply — dryRun does not mutate server
+  Setup : create draft, note current grid
+  Action : apply PAINT action with dryRun:true
+  Verify : GET /editor/drafts/{id} still returns original grid (unchanged)
+
+IT-19  POST /editor/drafts/{id}:validate — valid grid passes
+  Setup : generated draft (already has valid layout)
+  Expect: ok:true, errors:[]
+
+IT-20  POST /editor/drafts/{id}:validate — blank grid fails
+  Setup : blank draft (no ENTRY/EXIT/PARKING)
+  Expect: ok:false, errors list contains missing ENTRY, EXIT, PARKING messages
+
+IT-21  POST /editor/drafts/{id}:save — valid grid, new name
+  Setup : valid generated draft
+  Input : { name:"My Test Lot" }
+  Expect: ok:true, parkingLotId returned and non-empty
+
+IT-22  POST /editor/drafts/{id}:save — invalid grid (missing exit)
+  Setup : blank draft with only ENTRY and PARKING placed
+  Input : { name:"Broken Lot" }
+  Expect: ok:false, errors list includes missing EXIT message
+
+IT-23  POST /editor/drafts/{id}:save — duplicate name rejected
+  Pre-condition: "My Test Lot" already saved (from IT-21)
+  Input : { name:"My Test Lot" }
+  Expect: ok:false, error.code == "NAME_TAKEN"
+
+IT-24  GET /editor/saved — newly saved lot appears in list
+  Pre-condition: IT-21 completed
+  Expect: HTTP 200, items array contains entry with name=="My Test Lot",
+          capacity, width, height, num_entries, num_exits all present
+
+IT-25  DELETE /editor/saved/{id} — lot removed from list
+  Pre-condition: IT-21 lot exists
+  Action : DELETE /editor/saved/{parkingLotId from IT-21}
+  Expect: HTTP 204; subsequent GET /editor/saved no longer includes that item
+
+IT-26  DELETE /editor/saved/{id} — non-existent ID
+  Input : DELETE /editor/saved/fake-id-xyz
+  Expect: HTTP 404
+
+
+PHASE 4 — MANUAL / END-TO-END SCENARIOS
+────────────────────────────────────────────────────────────────────────────────
+
+  [ SIMULATION FLOWS ]
+
+E2E-01  Normal mode — live simulation
+  Steps : Home → Start Simulation → Normal → Config (generate 10×10, priority) →
+          Continue → live view runs
+  Expect: grid animates, cars appear, timestep counter increments
+
+E2E-02  Normal mode — headless simulation
+  Steps : Config → enable Headless → Run → results page
+  Expect: stats table loads within a few seconds for 1000 steps
+
+E2E-03  Normal mode — comparison mode
+  Steps : Config → enable Comparison → pick two algorithms → Run
+  Expect: two result columns shown side by side
+
+E2E-04  Batch mode — 3 simulations, all generate
+  Steps : Home → Batch → configure 3 blocks (different algorithms) →
+          Run → watch progress list → results page
+  Expect: 3 result cards, each with individual stats and Save button
+
+E2E-05  Batch mode — save one result
+  Pre-condition: E2E-04 completed
+  Action : Save Result on card 2, name "Batch Test", confirm
+  Expect: "Saved to history" badge replaces save button on card 2
+
+E2E-06  Batch mode — mixed success/failure
+  Setup : 2 sims; one with invalid lot ID "no-such-lot", one valid generate
+  Expect: invalid card shows "Failed" + error text, valid card shows full stats
+
+E2E-07  Mode select navigation
+  Steps : Home → Start Simulation → mode select →
+          Normal → Config → back → mode select →
+          Batch → Batch Config → back → mode select
+  Expect: all navigation transitions work without errors or blank screens
+
+  ─────────────────────────────────────────────────────────────────────────────
+
+  [ EDITOR FLOWS ]
+
+E2E-08  Create lot from scratch — happy path
+  Steps : Navigate to Editor → choose Blank, 15×15 →
+          paint ROAD cells to form a loop →
+          place ENTRY on left boundary edge →
+          place EXIT on right boundary edge →
+          place 3 PARKING spots adjacent to road →
+          click Validate → success →
+          click Save, name "My Lot A" → confirm
+  Expect: "Saved successfully" shown, lot appears in Saved Layouts page
+
+E2E-09  Validate before placing required cells — error list shown
+  Steps : create blank draft, click Validate immediately (no cells placed)
+  Expect: validation panel shows errors for missing ENTRY, EXIT, PARKING
+
+E2E-10  Try to place ENTRY on interior cell — rejected inline
+  Steps : in editor, select Entry tool, click a cell at (5, 5)
+  Expect: placement rejected (cell unchanged), error feedback shown in UI
+
+E2E-11  Try to place ENTRY on corner — rejected
+  Steps : select Entry tool, click corner cell (0, 0)
+  Expect: placement rejected, error feedback shown
+
+E2E-12  Try to place PARKING on WALL — rejected
+  Steps : select Parking tool, click a boundary WALL cell
+  Expect: placement rejected, error feedback shown
+
+E2E-13  Place PARKING on existing PARKING — rejected
+  Steps : place one parking spot, click same cell again with Parking tool
+  Expect: second placement rejected
+
+E2E-14  Erase a cell — resets to ROAD
+  Steps : place a PARKING spot, select Eraser, click same cell
+  Expect: cell visually returns to ROAD state
+
+E2E-15  Load existing lot into editor, modify, save as new name
+  Steps : Saved Layouts → open "My Lot A" → erase a spot →
+          Validate → Save, name "My Lot B"
+  Expect: "My Lot B" saved; "My Lot A" still exists separately in the list
+
+E2E-16  Load saved lot into simulation — grid dimensions match
+  Pre-condition: "My Lot A" (15×15) exists
+  Steps : Normal mode → Config → Layout source = Load → ID = "My Lot A" →
+          Run headless
+  Expect: result grid_width==15, grid_height==15
+
+E2E-17  Delete a lot from Saved Layouts
+  Steps : Saved Layouts page → click Delete on "My Lot A" → confirm dialog
+  Expect: card disappears, count decreases by 1
+
+E2E-18  Load non-existent lot ID in simulation — error shown
+  Steps : Normal mode → Config → Layout source = Load → ID = "ghost-lot" →
+          attempt to run
+  Expect: UI shows error (lot not found), does not crash or hang
+
+================================================================================
+  IMPLEMENTATION ORDER SUGGESTION
+================================================================================
+  Phase 1 (UT)  — Start here: pure Python, no server needed, fastest feedback.
+                   Editor controller and validator tests are the highest value.
+  Phase 3 (IT)  — Next: requires backend running. Covers all API contracts.
+  Phase 2 (FE)  — Requires Vitest + RTL setup. Lower priority than backend.
+  Phase 4 (E2E) — Run manually now; automate with Playwright as a stretch goal.
+================================================================================

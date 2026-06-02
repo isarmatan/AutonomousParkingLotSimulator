@@ -1,0 +1,237 @@
+E2E-01  Normal mode - 3D simulation
+    Steps:
+        starting point: Home page
+        1) Click 'Start Simulation'
+        2) Click 'Normal Simulation'
+        3) Config as following:
+            a) Initial Active Cars: 10
+            b) Arrival Rate: 0.3
+            c) Exit rate: 0.005
+            *the rest remains unchanged*
+        4) Click 'Continue To Layout'
+        5) Click 'Generate New'
+        6) *no configuration needed* - click 'Save Layout'
+        7) Click 'Start Simulation'
+        8) Click '3D' (Top Bar) 
+    
+    Expected: grid animates, cars appear, timestep counter increments, statistics dashboard appears, 3D simulation runs smoothly
+
+
+E2E-02  Normal mode - 2D simulation - Large Scale
+    Steps:
+        starting point: Home page
+        1) Click 'Start Simulation'
+        2) Click 'Normal Simulation'
+        3) Config as following:
+            a) Initial Active Cars: 1000
+            b) Arrival Rate: 0.3
+            c) Exit rate: 0.001
+            d) Algorithm: 'lacam0'
+            *the rest remains unchanged*
+        4) Click 'Continue To Layout'
+        5) Click 'Generate New'
+        6) Config as following:
+            a) Length: 70
+            b) Width: 70
+            c) #Entries: 5
+            d) #Exits: 5
+            e) Parking Spots: 1200
+        7) Click 'Save Layout'
+        8) Click 'Start Simulation'
+    
+    Expected: grid animates, cars appear, timestep counter increments, statistics dashboard appears, log apears, 2D simulation runs smoothly
+
+    E2E-03  Normal mode - Headless Mode
+    Steps:
+        starting point: Home page
+        1) Click 'Start Simulation'
+        2) Click 'Normal Simulation'
+        3) Config as following:
+            a) Initial Active Cars: 10
+            b) Arrival Rate: 0.3
+            c) Exit rate: 0.005
+            d) Click 'Headless Mode'
+            e) 'Continue To Layout' should be disabled - therefore modify 'Max Timesteps' = 300
+            *the rest remains unchanged*
+        4) Click 'Continue To Layout'
+        5) Click 'Generate New'
+        6) *no configuration needed* - click 'Save Layout'
+        7) Click 'Start Simulation'
+    
+    Expected: end results of the simulation are displayed on the screen
+
+    E2E-04 Normal mode - Comparison Mode
+    Steps:
+        starting point: Home page
+        1) Click 'Start Simulation'
+        2) Click 'Normal Simulation'
+        3) Config as following:
+            a) Initial Active Cars: 50
+            b) Arrival Rate: 0.3
+            c) Exit rate: 0.001
+            d) Click 'Comparison Mode'
+            e) Select 'lacam0' and 'PriorityPlanner'
+            e) 'Continue To Layout' should be disabled - therefore modify 'Max Timesteps' = 500
+            *the rest remains unchanged*
+        4) Click 'Continue To Layout'
+        5) Click 'Generate New'
+        6) *no configuration needed* - click 'Save Layout'
+        7) Click 'Start Simulation'
+    
+    Expected: end results of the both simulations are displayed on the screen side by side
+    *note: priority planner should work better on smaller scale than lacam0*
+
+    E2E-05 Batch Mode 
+    Steps:
+        starting point: Home page
+        1) Click 'Start Simulation'
+        2) Click 'Batch Simulation'
+        3) *dont config the first simulation* - click '+ Add Simulation'
+        4) Config as following:
+            a) Initial Active Cars: 50
+            b) Max Timesteps: 500
+            c) Algorithm: Lacam0
+            *the rest remains unchanged*
+        5) Click '+ Add Simulation' (5 times)
+        6) Click 'Run 7 Simulations'
+    
+    Expected: end results of the all simulations are displayed on the screen
+
+
+----- Parking Lot Editor -----
+    
+    E2E-06 Parking Lot Editor - invalid layout 01
+    Steps:
+        starting point: Home page
+        1) Click 'Parking Lot Editor'
+        2) Click 'Create Draft'
+        3) Click '2D'
+        *note: for your convenience - you can hover above the cell to see the exact (x,y)*
+        4) Click 'Validate'
+    
+    Expected: Error displayed, can not save parking lot
+
+    E2E-07 Parking Lot Editor - invalid layout 02
+    Steps:
+        starting point: Home page
+        1) Click 'Parking Lot Editor'
+        2) Click 'Create Draft'
+        3) Click '2D'
+        *note: for your convenience - you can hover above the cell to see the exact (x,y)*
+        4) Place Parking Spot on (0,3)
+    
+    Expected: Error displayed
+
+    E2E-08 Parking Lot Editor - invalid layout 03
+    Steps:
+        starting point: Home page
+        1) Click 'Parking Lot Editor'
+        2) Click 'Create Draft'
+        3) Click '2D'
+        *note: for your convenience - you can hover above the cell to see the exact (x,y)*
+        4) Place Entry on (0,3)
+        5) Place Exit on (3,0)
+        6) Click 'Validate'
+    
+    Expected: 'Grid must contain at least one PARKING spot' error is displayed
+
+    E2E-09 Parking Lot Editor - invalid layout 04
+    Steps:
+        starting point: Home page
+        1) Click 'Parking Lot Editor'
+        2) Click 'Create Draft'
+        3) Click '2D'
+        *note: for your convenience - you can hover above the cell to see the exact (x,y)*
+        4) Place Entry on (0,3)
+        5) Place Exit on (3,0)
+        6) Place Parking Spot on (18,1)
+        7) Place Walls on (17,1), (17,2) and (18,2)
+        6) Click 'Validate'
+    
+    Expected: 'PARKING at (18,1) is not reachable via roads' error is displayed
+
+
+    E2E-10 Parking Lot Editor - valid input - save grid
+    Steps:
+        starting point: Home page
+        1) Click 'Parking Lot Editor'
+        2) Click 'Create Draft'
+        3) Click '2D'
+        *note: for your convenience - you can hover above the cell to see the exact (x,y)*
+        4) Place Entry on (0,3)
+        5) Place Exit on (3,0)
+        6) Place Parking Spot on (5,3), (6,3), (11,9), (13,9)
+        7) Click 'Validate' - 'Looking good — the grid is valid.' is displayed
+        8) Click 'Save Layout'
+        9) Type 'Roni's lab' - hit save
+    
+    Expected: newly created parking lot is successfuly saved in the System
+
+
+    E2E-11 Live simulation - user's created lot
+    Steps:
+        starting point: Home page
+        1) Click 'Start Simulation'
+        2) Click 'Normal Simulation'
+        3) Config as following:
+            a) Initial Active Cars: 4
+            b) Arrival Rate: 0.3
+            c) Exit rate: 0.001
+            *the rest remains unchanged*
+        4) Click 'Continue To Layout'
+        5) Click 'Open Saved Layouts'
+        6) Select 'Roni's lab' parking lot
+        7) Click 'Start Simulation'
+        8) Click 'Pause'
+        9) Click 'Save Run'
+    Expected: simulation successfuly loaded on newly saved parking lot
+
+
+    ---- Statistics Page ----
+    
+    E2E-12 Live simulation - Save Simulation
+    Steps:
+        starting point: Home page
+        1) Click 'Start Simulation'
+        2) Click 'Normal Simulation'
+        3) Config as following:
+            a) Initial Active Cars: 10
+            b) Arrival Rate: 0.3
+            c) Exit rate: 0.005
+            *the rest remains unchanged*
+        4) Click 'Continue To Layout'
+        5) Click 'Generate New'
+        6) *no configuration needed* - click 'Save Layout'
+        7) Click 'Start Simulation'
+        *let it run for a bit*
+        8) Click 'Pause'
+        9) Click 'Save Run' - name it 'Roni's lab'
+        10) Click 'close'
+        11) Click 'Home'
+        12) Click 'Statistics Dashboard'
+
+    Expected: simulation successfuly saved and displayed in Statistics Page
+
+    E2E-12 Statistics Page - Export Statistics
+    Steps:
+        starting point: Home page
+        1) Click 'Statistics Dashboard'
+        2) Search 'Roni's Lab' in the search bar
+        3) Select it
+        4) Search 'Example123' in the search bar
+        5) Select it
+        6) Click 'Export Selected'
+
+        Expected: both simulation successfuly exported to CSV
+    
+
+    E2E-13 Statistics Page - Delete Simulation
+    Steps:
+        starting point: Home page
+        1) Click 'Statistics Dashboard'
+        2) Search 'Roni's Lab' in the search bar
+        3) Select it
+        4) Click 'Delete Selected'
+        5) Search 'Roni's Lab' in the search bar
+
+        Expected: simulation was successfuly deleted from our system
