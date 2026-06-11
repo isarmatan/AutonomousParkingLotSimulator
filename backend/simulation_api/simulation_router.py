@@ -330,10 +330,17 @@ def _build_and_run_headless(req: HeadlessSimulationRequest, grid: Grid) -> Headl
     cpu_sum = cpu_peak = mem_sum = mem_peak = 0.0
     sample_count = 0
 
+    import time as _time
+    deadline = (_time.monotonic() + req.step_timeout_ms / 1000.0) if req.step_timeout_ms else None
+
     completed = False
+    timed_out = False
     try:
         for _ in range(req.max_steps):
             simulation.step()
+            if deadline and _time.monotonic() > deadline:
+                timed_out = True
+                break
             if _proc and simulation.time % 20 == 0:
                 try:
                     cpu = _proc.cpu_percent(interval=None)
@@ -364,8 +371,8 @@ def _build_and_run_headless(req: HeadlessSimulationRequest, grid: Grid) -> Headl
         algorithm=req.algorithm,
         max_steps=req.max_steps,
         completed_steps=sim.time,
-        stopped_reason="all_cars_completed" if completed else "max_steps_reached",
-        status="COMPLETED" if completed else "MAX_STEPS_REACHED",
+        stopped_reason="all_cars_completed" if completed else ("timeout" if timed_out else "max_steps_reached"),
+        status="COMPLETED" if completed else ("TIMEOUT" if timed_out else "MAX_STEPS_REACHED"),
         grid_width=grid.width,
         grid_height=grid.height,
         parking_lot_id=parking_lot_id,
@@ -428,6 +435,7 @@ def run_comparison(req: ComparisonRequest, db: Session = Depends(get_db)):
             max_arriving_cars=req.max_arriving_cars,
             algorithm=algo,
             max_steps=req.max_steps,
+            step_timeout_ms=req.step_timeout_ms,
         )
         results.append(_build_and_run_headless(headless_req, grid))
 

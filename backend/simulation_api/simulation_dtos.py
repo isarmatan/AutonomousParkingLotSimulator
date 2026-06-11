@@ -191,6 +191,7 @@ class HeadlessSimulationRequest(BaseModel):
     max_arriving_cars: int = 0  # 0 = unlimited
     algorithm: str = "priority"
     max_steps: int  # required — validated in endpoint
+    step_timeout_ms: Optional[int] = None  # wall-clock run limit in ms
 
 
 class HeadlessResultDTO(BaseModel):
@@ -254,6 +255,7 @@ class ComparisonRequest(BaseModel):
     initial_cars: int = 5
     max_arriving_cars: int = 0
     max_steps: int  # required
+    step_timeout_ms: Optional[int] = None  # wall-clock run limit in ms
 
     algorithms: List[str]  # exactly 2 (extensible for future 3rd algorithm)
 

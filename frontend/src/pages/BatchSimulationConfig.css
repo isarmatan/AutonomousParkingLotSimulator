@@ -342,6 +342,12 @@
   color: #f87171;
 }
 
+.batchStatusBadge--timeout {
+  background: rgba(251, 113, 36, 0.1);
+  border: 1px solid rgba(251, 113, 36, 0.3);
+  color: #fb7224;
+}
+
 .batchResultMeta {
   display: flex;
   gap: 8px;

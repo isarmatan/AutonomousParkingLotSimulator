@@ -256,7 +256,9 @@ class LNS2SimulationCore:
         if paths is not None:
             for car_id, path in paths.items():
                 self.active_cars[car_id].set_path(path)
-            self.total_planned += len(paths)
+            n = len(paths)
+            self.total_planned += n
+            self._emit_event("batch", "replanned", f"Replanned {n} car{'s' if n != 1 else ''}")
             self.needs_replan = False
             self.last_replan_time = self.time
         else:

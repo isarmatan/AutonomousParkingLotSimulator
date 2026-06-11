@@ -1,11 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import AppLayout from "../layouts/AppLayout";
 import {
   Save,
   AlertTriangle,
   CheckCircle,
-  Eraser,
+  Layers,
   Square,
   ParkingSquare,
   LogIn,
@@ -51,12 +51,11 @@ type Tool = {
 };
 
 const TOOLS: Tool[] = [
-  { id: "wall", label: "Wall", icon: <Square />, actionType: "PAINT", cellType: "WALL" },
+  { id: "wall", label: "Wall", icon: <Layers />, actionType: "PAINT", cellType: "WALL" },
   { id: "road", label: "Road", icon: <Square />, actionType: "PAINT", cellType: "ROAD" },
   { id: "parking", label: "Parking", icon: <ParkingSquare />, actionType: "PLACE_PARKING" },
   { id: "entry", label: "Entry", icon: <LogIn />, actionType: "PLACE_ENTRY" },
   { id: "exit", label: "Exit", icon: <LogOut />, actionType: "PLACE_EXIT" },
-  { id: "eraser", label: "Erase", icon: <Eraser />, actionType: "CLEAR" },
 ];
 
 export default function Editor() {
@@ -80,10 +79,8 @@ export default function Editor() {
   const [initWidth, setInitWidth] = useState(20);
   const [initHeight, setInitHeight] = useState(15);
 
-  // --- Fit-to-screen for 2D ---
-  const canvas2DRef = useRef<HTMLDivElement | null>(null);
-  const [gridScale, setGridScale] = useState(1);
   const CELL_PX = 32;
+  const isLargeGrid = !!(grid && (grid.width > 40 || grid.height > 40));
 
   // Stop dragging when mouse leaves window or goes up anywhere
   useEffect(() => {
@@ -118,6 +115,7 @@ export default function Editor() {
       const data = await res.json();
       setDraftId(data.draftId);
       setGrid(data.grid);
+      if (initWidth > 40 || initHeight > 40) setViewMode("2D");
     } catch (e) {
       console.error(e);
       alert("Failed to initialize editor session.");
@@ -223,76 +221,37 @@ export default function Editor() {
     return r;
   }, [grid]);
 
-  // Compute scale in 2D so the entire grid fits
-  useEffect(() => {
-    if (!grid) return;
-    if (viewMode !== "2D") return;
-    const el = canvas2DRef.current;
-    if (!el) return;
-
-    const compute = () => {
-      const rect = el.getBoundingClientRect();
-
-      const availableW = rect.width;
-      const availableH = rect.height;
-
-      const gridW = grid.width * CELL_PX;
-      const gridH = grid.height * CELL_PX;
-
-      const margin = 40; // breathing room
-
-      const sx = (availableW - margin) / gridW;
-      const sy = (availableH - margin) / gridH;
-      const s = Math.min(1, sx, sy);
-
-      setGridScale(Math.max(0.25, s));
-    };
-
-    compute();
-
-    const ro = new ResizeObserver(() => compute());
-    ro.observe(el);
-
-    window.addEventListener("resize", compute);
-    return () => {
-      window.removeEventListener("resize", compute);
-      ro.disconnect();
-    };
-  }, [grid, viewMode]);
-
   // Render Grid
   const renderGrid = () => {
     if (!grid || !rows) return null;
 
     return (
-      <div className="editorCanvasScroll" ref={canvas2DRef}>
-        <div className="editorGridWrap" style={{ transform: `scale(${gridScale})` }}>
-          <div
-            className="editorGrid"
-            style={{
-              gridTemplateColumns: `repeat(${grid.width}, ${CELL_PX}px)`,
-              gridTemplateRows: `repeat(${grid.height}, ${CELL_PX}px)`,
-            }}
-          >
-            {rows.map((row, y) =>
-              row.map((cell: CellDTO | null, x: number) => {
-                if (!cell) return null;
-                const hasError = validationErrors.some((e) => e.x === x && e.y === y);
+      <div className={`editorCanvasScroll${isLargeGrid ? " editorCanvasScroll--large" : ""}`}>
+        <div
+          className={`editorGrid${isLargeGrid ? " editorGrid--large" : ""}`}
+          style={{
+            gridTemplateColumns: `repeat(${grid.width}, ${CELL_PX}px)`,
+            gridTemplateRows: `repeat(${grid.height}, ${CELL_PX}px)`,
+          }}
+        >
+          {rows.map((row, y) =>
+            row.map((cell: CellDTO | null, x: number) => {
+              if (!cell) return null;
+              const hasError = validationErrors.some((e) => e.x === x && e.y === y);
 
-                return (
-                  <div
-                    key={`${x}-${y}`}
-                    className={`editorCell cell-${cell.type} ${hasError ? "cell-error" : ""}`}
-                    data-mark={cell.type === "ENTRY" ? "IN" : cell.type === "EXIT" ? "OUT" : undefined}
-                    onMouseDown={() => onMouseDown(x, y)}
-                    onMouseEnter={() => onMouseEnter(x, y)}
-                    title={`(${x},${y}) ${cell.type}`}
-                    style={hasError ? { outline: "2px solid red", zIndex: 10 } : {}}
-                  />
-                );
-              })
-            )}
-          </div>
+              return (
+                <div
+                  key={`${x}-${y}`}
+                  className={`editorCell cell-${cell.type} ${hasError ? "cell-error" : ""}`}
+                  data-mark={cell.type === "ENTRY" ? "IN" : cell.type === "EXIT" ? "OUT" : undefined}
+                  onMouseDown={() => onMouseDown(x, y)}
+                  onMouseEnter={() => onMouseEnter(x, y)}
+                  title={`(${x},${y}) ${cell.type}`}
+                  style={hasError ? { outline: "2px solid red", zIndex: 10 } : {}}
+                />
+              );
+            })
+          )}
         </div>
       </div>
     );
@@ -376,9 +335,10 @@ export default function Editor() {
                   </button>
                   <button
                     className={`editorToolBtn ${viewMode === "3D" ? "active" : ""}`}
-                    onClick={() => setViewMode("3D")}
-                    title="3D View"
-                    style={{ flex: 1, height: 40, flexDirection: "row" }}
+                    onClick={() => !isLargeGrid && setViewMode("3D")}
+                    title={isLargeGrid ? "3D disabled for grids larger than 40×40" : "3D View"}
+                    disabled={isLargeGrid}
+                    style={{ flex: 1, height: 40, flexDirection: "row", opacity: isLargeGrid ? 0.4 : 1 }}
                   >
                     <div className="editorToolIcon" style={{ marginBottom: 0, marginRight: 6 }}>
                       <Box size={18} />

@@ -15,7 +15,7 @@ export default function SimulationModeSelect() {
       </div>
 
       <div className="modeGrid">
-        <button className="modeCard" onClick={() => nav("/config")}>
+        <button className="modeCard" onClick={() => nav("/layout")}>
           <div className="modeCardIcon modeCardIcon--blue">
             <Play size={28} />
           </div>

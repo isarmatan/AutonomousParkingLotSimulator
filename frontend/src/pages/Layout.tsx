@@ -1,17 +1,14 @@
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import AppLayout from "../layouts/AppLayout";
 import "../pages/SimulationConfig.css";
 import bgHero from "../assets/HomePage.png";
 import { Database, PlusCircle, CheckCircle2, LayoutGrid } from "lucide-react";
 
-const CFG_KEY = "sim_config_v3";
-
 export default function Layout() {
   const nav = useNavigate();
   const [params] = useSearchParams();
   const chosenLayoutId = params.get("layout");
-  const [hasConfig] = useState(() => !!sessionStorage.getItem(CFG_KEY));
 
 
   const layoutLabel = useMemo(() => {
@@ -22,8 +19,7 @@ export default function Layout() {
 
   const onStart = () => {
     if (!chosenLayoutId) return;
-    // Pass the layout ID to the simulation page
-    nav(`/simulation?layout=${encodeURIComponent(chosenLayoutId)}`);
+    nav(`/config?layout=${encodeURIComponent(chosenLayoutId)}`);
   };
 
   return (
@@ -36,25 +32,8 @@ export default function Layout() {
       </div>
 
       <div className="setupPage">
-        {!hasConfig ? (
-          <div className="setupCard">
-            <div className="cardHead">
-              <h2 className="cardTitle">Missing Configuration</h2>
-              <p className="cardSub">Please set simulation parameters first.</p>
-            </div>
-            <div className="setupActions">
-              <button className="btnBackPrimary" onClick={() => nav("/config")}>
-                ← Back
-              </button>
-
-              <button className="btnPrimary" onClick={() => nav("/config")}>
-                Go to Configuration →
-              </button>
-            </div>
-          </div>
-        ) : (
-          <>
-            <div className="setupGrid">
+        <>
+          <div className="setupGrid">
               <section className="setupCard">
                 <div className="cardHead">
                   <h2 className="cardTitle">
@@ -109,23 +88,22 @@ export default function Layout() {
                 <div className="cardHead">
                   <h2 className="cardTitle">
                     <span className="cardIcon" aria-hidden="true"><CheckCircle2 size={18} /></span>
-                    Selected Parking Lot: 
+                    Selected Parking Lot
                   </h2>
                   <p className="cardSub">{layoutLabel}</p>
                 </div>
 
                 <div className="setupActions">
                   <button className="btnStart" onClick={onStart}>
-                    Start Simulation →
+                    Continue to Config →
                   </button>
                 </div>
               </div>
             ) : null}
           </>
-        )}
 
         <div className="setupActions setupActions--single">
-          <button className="btnBackPrimary" onClick={() => nav("/config")}>
+          <button className="btnBackPrimary" onClick={() => nav("/mode-select")}>
             ← Back
           </button>
         </div>

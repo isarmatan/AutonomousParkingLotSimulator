@@ -121,6 +121,7 @@ export default function BatchSimulationConfig() {
   void _init;
   const [savedIds, setSavedIds] = useState<Set<string>>(new Set());
   const [savingAll, setSavingAll] = useState(false);
+  const [batchTimeoutMs, setBatchTimeoutMs] = useState(5000);
   // ── Validation ────────────────────────────────────────────────────────────
   const simErrors = batchSims.map(s => {
     if (s.entry.max_timesteps < 1) return "Max Timesteps must be ≥ 1";
@@ -212,6 +213,8 @@ export default function BatchSimulationConfig() {
         max_steps: entry.max_timesteps,
       };
 
+      payload.step_timeout_ms = batchTimeoutMs;
+
       if (entry.layout_source === "generate") {
         payload.source = "generate";
         payload.width = entry.layout_width;
@@ -274,6 +277,37 @@ export default function BatchSimulationConfig() {
       {/* ── CONFIG PHASE ── */}
       {phase === "config" && (
         <div className="setupPage">
+          {/* Global timeout */}
+          <section className="setupCard" style={{ padding: "1.2rem 1.5rem" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
+              <span style={{ fontSize: "0.85rem", fontWeight: 700, color: "#94a3b8", textTransform: "uppercase", letterSpacing: "0.05em", flexShrink: 0 }}>
+                <Zap size={14} style={{ marginRight: 6, verticalAlign: "middle", color: "#f59e0b" }} />
+                Headless Timeout
+              </span>
+              <input
+                className="numInput"
+                type="number"
+                min={500}
+                max={20000}
+                step={500}
+                value={batchTimeoutMs}
+                onChange={e => setBatchTimeoutMs(Math.min(20000, Math.max(500, Number(e.target.value))))}
+                style={{ width: 100 }}
+              />
+              <input
+                className="rangeInput"
+                type="range"
+                min={500}
+                max={20000}
+                step={500}
+                value={batchTimeoutMs}
+                onChange={e => setBatchTimeoutMs(Number(e.target.value))}
+                style={{ flex: 1, minWidth: 120, maxWidth: 300 }}
+              />
+              <span style={{ fontSize: "0.8rem", color: "#64748b", flexShrink: 0 }}>{(batchTimeoutMs / 1000).toFixed(1)} s per simulation</span>
+            </div>
+          </section>
+
           {/* Simulation Blocks */}
           {batchSims.map((sim, idx) => (
             <SimBlock
@@ -659,6 +693,13 @@ function BatchNum({ label, value, min, max, onChange }: {
   );
 }
 
+function formatHeadlessStatus(status: string): string {
+  if (status === "COMPLETED")         return "All Cars Done";
+  if (status === "MAX_STEPS_REACHED") return "Max Steps Reached";
+  if (status === "TIMEOUT")           return "Timed Out";
+  return status.replace(/_/g, " ");
+}
+
 function SimResultCard({ index, sim, isSaved, onSaved }: {
   index: number;
   sim: BatchSimState;
@@ -712,8 +753,8 @@ function SimResultCard({ index, sim, isSaved, onSaved }: {
         <div className="batchResultTitle">
           <span className="batchResultIndex">Simulation {index + 1}</span>
           <span className="batchAlgoBadge">{algoLabel}</span>
-          <span className={`batchStatusBadge batchStatusBadge--${sim.status}`}>
-            {sim.status === "success" && (r?.status.replace(/_/g, " ") ?? "Completed")}
+          <span className={`batchStatusBadge batchStatusBadge--${sim.status}${r?.status === "TIMEOUT" ? " batchStatusBadge--timeout" : ""}`}>
+            {sim.status === "success" && formatHeadlessStatus(r?.status ?? "")}
             {sim.status === "failed"  && "Failed"}
             {sim.status === "pending" && "Pending"}
             {sim.status === "running" && "Running"}
@@ -725,7 +766,7 @@ function SimResultCard({ index, sim, isSaved, onSaved }: {
             <span>·</span>
             <span>{r.grid_width}×{r.grid_height} grid</span>
             <span>·</span>
-            <span>{r.stopped_reason.replace(/_/g, " ")}</span>
+            <span>{formatHeadlessStatus(r.status)}</span>
           </div>
         )}
       </div>

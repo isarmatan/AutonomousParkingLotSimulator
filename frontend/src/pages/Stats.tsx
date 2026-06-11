@@ -103,9 +103,17 @@ export default function Stats() {
   const formatDate = (isoString: string) => new Date(isoString).toLocaleString();
 
   const getStatusClass = (status: string) => {
-    if (status === "COMPLETED") return "completed";
+    if (status === "COMPLETED")         return "completed";
     if (status === "MAX_STEPS_REACHED") return "partial";
+    if (status === "TIMEOUT")           return "timeout";
     return "failed";
+  };
+
+  const formatStatus = (status: string) => {
+    if (status === "COMPLETED")         return "All Cars Done";
+    if (status === "MAX_STEPS_REACHED") return "Max Steps Reached";
+    if (status === "TIMEOUT")           return "Timed Out";
+    return status.replace(/_/g, " ");
   };
 
   const filtered = useMemo(() => {
@@ -320,7 +328,7 @@ export default function Stats() {
                     <td>
                       <span className={`statusBadge ${getStatusClass(item.status)}`}>
                         <span className="dot" />
-                        {item.status.replace(/_/g, " ")}
+                        {formatStatus(item.status)}
                       </span>
                     </td>
 

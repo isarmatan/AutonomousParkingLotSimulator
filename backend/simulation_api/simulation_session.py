@@ -69,6 +69,7 @@ class SimulationSession:
         # binding issues that affect asyncio.Event when created in a sync thread).
         self._paused: bool = False
         self._stopped: bool = False
+        self._step_once: bool = False  # advance exactly one step while paused
 
         self._psutil_process = _psutil.Process() if _PSUTIL_OK else None
         self._cpu_last: Optional[float] = None
@@ -105,6 +106,9 @@ class SimulationSession:
             self._stopped = True
             self._paused = False  # unblock the poll loop
             await self._send_status("STOPPED")
+        elif t == "STEP_ONCE":
+            if self._paused and not self._stopped:
+                self._step_once = True
         elif t == "RESET":
             await self._do_reset()
 
@@ -127,10 +131,12 @@ class SimulationSession:
         loop = asyncio.get_running_loop()
         try:
             while not self._stopped:
-                # Poll while paused (yields control back to the event loop each iteration)
+                # Poll while paused; _step_once lets us fall through for exactly one step
                 if self._paused:
-                    await asyncio.sleep(0.05)
-                    continue
+                    if not self._step_once:
+                        await asyncio.sleep(0.05)
+                        continue
+                    self._step_once = False  # consume token; stay paused after the step
 
                 # Optional timestep cap
                 if self.max_timesteps is not None and self.simulation.time >= self.max_timesteps:
@@ -141,7 +147,11 @@ class SimulationSession:
                 await loop.run_in_executor(None, self.simulation.step)
 
                 await self._send_step()
-                await asyncio.sleep(self.step_delay_ms / 1000.0)
+                # Skip the configured delay when manually stepping (stay responsive)
+                if self._paused:
+                    await asyncio.sleep(0)  # yield to event loop only
+                else:
+                    await asyncio.sleep(self.step_delay_ms / 1000.0)
         except Exception as e:
             await self._send({"type": "ERROR", "message": str(e)})
         finally:
@@ -166,6 +176,7 @@ class SimulationSession:
         self.simulation = self._simulation_factory()
         self._stopped = False
         self._paused = False
+        self._step_once = False
         self.status = "RUNNING"
 
         # Re-send INIT so the frontend resets its state

@@ -352,6 +352,16 @@
   box-shadow: 0 0 0 4px rgba(253,230,138,.22);
 }
 
+.statusBadge.timeout{
+  border-color: rgba(251,113,36,.42);
+  background: rgba(251,113,36,.12);
+  color: rgba(255,220,190,.98);
+}
+.statusBadge.timeout .dot{
+  background: #fb7224;
+  box-shadow: 0 0 0 4px rgba(251,113,36,.22);
+}
+
 .algoBadge {
   display: inline-block;
   padding: 2px 8px;

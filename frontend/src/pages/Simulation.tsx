@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import AppLayout from "../layouts/AppLayout";
-import { Play, Pause, Square, RotateCcw, AlertTriangle, Loader2, LayoutGrid, Box } from "lucide-react";
+import { Play, Pause, Square, RotateCcw, StepForward, AlertTriangle, Loader2, LayoutGrid, Box } from "lucide-react";
 import "./Simulation.css";
 import Simulation3D from "../components/Simulation3D";
 
@@ -18,6 +18,7 @@ type SimConfig = {
   headless_mode?: boolean;
   comparison_mode?: boolean;
   comparison_algorithms?: string[];
+  headless_timeout_ms?: number;
 };
 
 type LiveSimulationRequest = SimConfig & {
@@ -78,7 +79,7 @@ type WsStatus = "IDLE" | "CONNECTING" | "RUNNING" | "PAUSED" | "STOPPED" | "COMP
 type LogEvent = {
   step: number;
   car_id: string;
-  event_type: "entered_lot" | "exited_lot" | "intent_park_to_exit" | "intent_exit_to_park";
+  event_type: "entered_lot" | "exited_lot" | "intent_park_to_exit" | "intent_exit_to_park" | "replanned";
   message: string;
 };
 
@@ -123,10 +124,11 @@ const LAYOUT_KEY = "parking_layout_v1";
 const MAX_LOG_ENTRIES = 300;
 
 const EVENT_ICONS: Record<string, string> = {
-  entered_lot:        "→",
-  exited_lot:         "←",
+  entered_lot:         "→",
+  exited_lot:          "←",
   intent_park_to_exit: "↑",
   intent_exit_to_park: "↓",
+  replanned:           "↺",
 };
 
 const STATUS_CLASS: Record<WsStatus, string> = {
@@ -172,6 +174,8 @@ export default function Simulation() {
   const [liveTimesteps, setLiveTimesteps] = useState<Timestep[]>([]);
   const [renderTick, setRenderTick] = useState(0);
   const [logEvents, setLogEvents]   = useState<LogEvent[]>([]);
+  const [highlightedCarId, setHighlightedCarId] = useState<string | null>(null);
+  const highlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [sessionId, setSessionId]   = useState<string | null>(null);
   const [saveModalOpen, setSaveModalOpen] = useState(false);
   const [saveName, setSaveName]     = useState("");
@@ -256,6 +260,7 @@ export default function Simulation() {
             ...basePayload,
             max_steps: config.max_timesteps,
             algorithms: config.comparison_algorithms ?? ["priority", "lacam0"],
+            step_timeout_ms: config.headless_timeout_ms ?? 5000,
           };
           const cRes = await fetch(`${API_URL}/simulation/compare`, {
             method: "POST",
@@ -276,7 +281,7 @@ export default function Simulation() {
         if (config.headless_mode) {
           setLoadingMessage("Running headless simulation…");
           setWsStatus("IDLE");
-          const headlessPayload = { ...basePayload, max_steps: config.max_timesteps };
+          const headlessPayload = { ...basePayload, max_steps: config.max_timesteps, step_timeout_ms: config.headless_timeout_ms ?? 5000 };
           const hRes = await fetch(`${API_URL}/simulation/headless`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -381,9 +386,10 @@ export default function Simulation() {
     wsRef.current?.send(JSON.stringify(msg));
   }, []);
 
-  const handlePause  = () => send({ type: "PAUSE" });
-  const handleResume = () => send({ type: "RESUME" });
-  const handleStop   = () => send({ type: "STOP" });
+  const handlePause    = () => send({ type: "PAUSE" });
+  const handleResume   = () => send({ type: "RESUME" });
+  const handleStop     = () => send({ type: "STOP" });
+  const handleStepOnce = () => send({ type: "STEP_ONCE" });
   const handleReset  = () => {
     liveCarsRef.current = {};
     prevCarsRef.current = {};
@@ -395,6 +401,19 @@ export default function Simulation() {
     send({ type: "RESET" });
   };
 
+  const handleLogDoubleClick = (ev: LogEvent) => {
+    const id = ev.car_id;
+    if (!id || id === "batch") return;
+    if (highlightTimerRef.current) clearTimeout(highlightTimerRef.current);
+    setHighlightedCarId(prev => {
+      const next = prev === id ? null : id;
+      if (next) {
+        highlightTimerRef.current = setTimeout(() => setHighlightedCarId(null), 4000);
+      }
+      return next;
+    });
+  };
+
   const handleLogScroll = () => {
     const el = logRef.current;
     if (!el) return;
@@ -402,6 +421,13 @@ export default function Simulation() {
   };
 
   const isConnected = wsStatus === "RUNNING" || wsStatus === "PAUSED";
+
+  const formatStatus = (s: string) => {
+    if (s === "COMPLETED")        return "All Cars Done";
+    if (s === "MAX_STEPS_REACHED") return "Max Steps Reached";
+    if (s === "TIMEOUT")           return "Timed Out";
+    return s.replace(/_/g, " ");
+  };
 
   const canSave = (wsStatus === "PAUSED" || wsStatus === "COMPLETED") && sessionId !== null;
   const canSaveHeadless = headlessResult !== null && comparisonResults === null;
@@ -498,6 +524,19 @@ export default function Simulation() {
       const carLen = CELL_PX * 0.75;
       const carW   = CELL_PX * 0.45;
 
+      // Highlight ring (behind car body)
+      if (id === highlightedCarId) {
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(px, py, CELL_PX * 0.62, 0, Math.PI * 2);
+        ctx.strokeStyle = "#ffffff";
+        ctx.lineWidth   = 2.5;
+        ctx.shadowColor = "#ffffff";
+        ctx.shadowBlur  = 12;
+        ctx.stroke();
+        ctx.restore();
+      }
+
       ctx.save();
       ctx.translate(px, py);
 
@@ -526,7 +565,7 @@ export default function Simulation() {
       ctx.textBaseline = "middle";
       ctx.fillText(id.slice(0, 3), px, py);
     });
-  }, [renderTick, viewMode, canvasSize, gridData]);
+  }, [renderTick, viewMode, canvasSize, gridData, highlightedCarId]);
 
   // ---- DOM grid rows ----
   const gridRows = useMemo(() => {
@@ -623,9 +662,14 @@ export default function Simulation() {
                     <RotateCcw size={18} />
                   </button>
                   {wsStatus === "PAUSED" ? (
-                    <button className="iconBtn primary" onClick={handleResume} title="Resume">
-                      <Play size={18} />
-                    </button>
+                    <>
+                      <button className="iconBtn primary" onClick={handleResume} title="Resume">
+                        <Play size={18} />
+                      </button>
+                      <button className="iconBtn" onClick={handleStepOnce} title="Step one timestep forward">
+                        <StepForward size={18} />
+                      </button>
+                    </>
                   ) : (
                     <button
                       className="iconBtn primary"
@@ -679,8 +723,8 @@ export default function Simulation() {
                     <div className="comparisonSideHeader">
                       <div className="comparisonSideBadges">
                         <span className="headlessAlgoBadge">{result.algorithm.toUpperCase()}</span>
-                        <span className={`headlessStatusBadge ${result.status === "COMPLETED" ? "completed" : "partial"}`}>
-                          {result.status.replace(/_/g, " ")}
+                        <span className={`headlessStatusBadge ${result.status === "COMPLETED" ? "completed" : result.status === "TIMEOUT" ? "timeout" : "partial"}`}>
+                          {formatStatus(result.status)}
                         </span>
                       </div>
                       <span className="comparisonSideSteps">{result.completed_steps.toLocaleString()} steps</span>
@@ -741,8 +785,8 @@ export default function Simulation() {
               <div className="headlessResultHeader">
                 <div className="headlessResultBadge">
                   <span className="headlessAlgoBadge">{headlessResult.algorithm.toUpperCase()}</span>
-                  <span className={`headlessStatusBadge ${headlessResult.status === "COMPLETED" ? "completed" : "partial"}`}>
-                    {headlessResult.status.replace(/_/g, " ")}
+                  <span className={`headlessStatusBadge ${headlessResult.status === "COMPLETED" ? "completed" : headlessResult.status === "TIMEOUT" ? "timeout" : "partial"}`}>
+                    {formatStatus(headlessResult.status)}
                   </span>
                 </div>
                 <div className="headlessResultMeta">
@@ -750,7 +794,7 @@ export default function Simulation() {
                   <span>·</span>
                   <span>{headlessResult.grid_width}×{headlessResult.grid_height} grid</span>
                   <span>·</span>
-                  <span>{headlessResult.stopped_reason.replace(/_/g, " ")}</span>
+                  <span>{formatStatus(headlessResult.status)}</span>
                 </div>
               </div>
               <div className="headlessStatGrid">
@@ -807,7 +851,7 @@ export default function Simulation() {
               <AlertTriangle className="errorIcon" size={48} />
               <h2>Simulation Error</h2>
               <p>{error}</p>
-              <button className="btnPrimary" onClick={() => nav("/config")}>
+              <button className="btnPrimary" onClick={() => nav(`/config?layout=${encodeURIComponent(layoutId ?? "new")}`)}>
                 Return to Config
               </button>
             </div>
@@ -980,7 +1024,12 @@ export default function Simulation() {
                     <span className="simEventLogBadge">{logEvents.length}</span>
                   </div>
                   {logEvents.map((ev, i) => (
-                    <div key={i} className={`logEntry logEntry--${ev.event_type}`}>
+                    <div
+                      key={i}
+                      className={`logEntry logEntry--${ev.event_type}${ev.car_id && ev.car_id !== "batch" && ev.car_id === highlightedCarId ? " logEntry--active" : ""}`}
+                      onDoubleClick={() => handleLogDoubleClick(ev)}
+                      title={ev.car_id && ev.car_id !== "batch" ? "Double-click to highlight car" : undefined}
+                    >
                       <span className="logEntry__icon">{EVENT_ICONS[ev.event_type] ?? "•"}</span>
                       <span className="logEntry__msg">{ev.message}</span>
                       <span className="logEntry__step">t={ev.step}</span>

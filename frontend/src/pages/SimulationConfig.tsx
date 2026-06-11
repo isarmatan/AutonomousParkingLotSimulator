@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import AppLayout from "../layouts/AppLayout";
 import "./SimulationConfig.css";
 import bgHero from "../assets/HomePage.webp"; 
@@ -18,6 +18,7 @@ type SimConfig = {
   headless_mode: boolean;
   comparison_mode: boolean;
   comparison_algorithms: string[];
+  headless_timeout_ms?: number;
 };
 
 const ALL_ALGORITHMS: { value: string; label: string }[] = [
@@ -30,6 +31,8 @@ const STORAGE_KEY = "sim_config_v3";
 
 export default function SimulationConfig() {
   const nav = useNavigate();
+  const [params] = useSearchParams();
+  const layoutId = params.get("layout") ?? "new";
 
   const [planningHorizon, setPlanningHorizon] = useState<number>(50);
   const [goalReserveHorizon, setGoalReserveHorizon] = useState<number>(200);
@@ -42,6 +45,7 @@ export default function SimulationConfig() {
   const [headlessMode, setHeadlessMode] = useState<boolean>(false);
   const [comparisonMode, setComparisonMode] = useState<boolean>(false);
   const [comparisonAlgorithms, setComparisonAlgorithms] = useState<string[]>(["priority", "lacam0"]);
+  const [headlessTimeoutMs, setHeadlessTimeoutMs] = useState<number>(5000);
 
   const handleHeadlessChange = (v: boolean) => {
     setHeadlessMode(v);
@@ -84,15 +88,16 @@ export default function SimulationConfig() {
       comparison_algorithms: comparisonAlgorithms,
     };
 
+    if (headlessMode || comparisonMode) cfg.headless_timeout_ms = headlessTimeoutMs;
     sessionStorage.setItem(STORAGE_KEY, JSON.stringify(cfg));
-    nav("/layout");
+    nav(`/simulation?layout=${encodeURIComponent(layoutId)}`);
   };
 
   return (
     <AppLayout variant="cinematic" bgImage={bgHero}>
       <div className="setupHeader">
         <h1 className="setupTitle">Configuration</h1>
-        <p className="setupSubtitle">Define simulation parameters before selecting a parking layout.</p>
+        <p className="setupSubtitle">Configure simulation parameters for the selected parking layout.</p>
       </div>
 
       <div className="setupPage">
@@ -196,6 +201,21 @@ export default function SimulationConfig() {
               onChange={handleComparisonChange}
             />
 
+            {(headlessMode || comparisonMode) && (
+              <FieldRow
+                icon={<Clock size={16} />}
+                label="Headless Timeout (ms)"
+                description="Maximum real-time duration the headless run may take before it is stopped."
+                value={headlessTimeoutMs}
+                min={500}
+                max={20000}
+                step={500}
+                onChange={setHeadlessTimeoutMs}
+                onDefault={() => setHeadlessTimeoutMs(5000)}
+                defaultHint="5 000 ms"
+              />
+            )}
+
             {comparisonMode && (
               <AlgorithmPicker
                 all={ALL_ALGORITHMS}
@@ -231,7 +251,7 @@ export default function SimulationConfig() {
         </div>
 
         <div className="setupActions">
-          <button className="btnBackPrimary" onClick={() => nav("/")}>
+          <button className="btnBackPrimary" onClick={() => nav(`/layout?layout=${encodeURIComponent(layoutId)}`)}>
             ← Back
           </button>
 
@@ -251,7 +271,7 @@ export default function SimulationConfig() {
                 : undefined
             }
           >
-            Continue to Layout →
+            Start Simulation →
           </button>
         </div>
       </div>

@@ -453,6 +453,15 @@
 .logEntry--intent_park_to_exit .logEntry__msg  { color: #fde68a; }
 .logEntry--intent_exit_to_park .logEntry__icon { color: #38bdf8; }
 .logEntry--intent_exit_to_park .logEntry__msg  { color: #7dd3fc; }
+.logEntry--replanned .logEntry__icon { color: #a78bfa; }
+.logEntry--replanned .logEntry__msg  { color: #c4b5fd; }
+
+.logEntry[title] { cursor: pointer; }
+.logEntry--active {
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 4px;
+  outline: 1px solid rgba(255, 255, 255, 0.2);
+}
 
 .simGrid {
   display: grid;
@@ -684,6 +693,12 @@
   background: rgba(251, 191, 36, 0.12);
   border: 1px solid rgba(251, 191, 36, 0.3);
   color: #fbbf24;
+}
+
+.headlessStatusBadge.timeout {
+  background: rgba(251, 113, 36, 0.12);
+  border: 1px solid rgba(251, 113, 36, 0.3);
+  color: #fb7224;
 }
 
 .headlessResultMeta {

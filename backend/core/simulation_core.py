@@ -259,6 +259,7 @@ class SimulationCore:
         for car in self.active_cars.values():
             if not car.has_path():
                 cars_needing_plan.append(car)
+        _replanned_count = 0
         
         def dist_to_goal(c):
             if not c.goal: return float('inf')
@@ -310,6 +311,10 @@ class SimulationCore:
                     self._emit_event(car_id, "intent_park_to_exit", f"Car {car_id} has changed its intent from parking to exiting")
             else:
                 car.plan_fail_count = 0
+                _replanned_count += 1
+
+        if _replanned_count > 0:
+            self._emit_event("batch", "replanned", f"Replanned {_replanned_count} car{'s' if _replanned_count != 1 else ''}")
 
         # 2. Determine intended next positions
         # current_pos -> active_car_id
