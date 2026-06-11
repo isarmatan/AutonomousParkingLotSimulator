@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import AppLayout from "../layouts/AppLayout";
 import "./SimulationConfig.css";
@@ -7,7 +7,7 @@ import bgHero from "../assets/HomePage.webp";
 import {
   Layers, Plus, Trash2, Play, RotateCcw, CheckCircle2,
   XCircle, Loader2, Cpu, Hash, LogIn, LogOut, Clock,
-  Database, Zap, Save, X,
+  Database, Zap, Save, X, Copy, FolderOpen,
 } from "lucide-react";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -62,6 +62,7 @@ type BatchSimEntry = {
   layout_exits: number;
   layout_parking_spots: number;
   layout_parking_lot_id: string;
+  layout_parking_lot_name: string;
 };
 
 type BatchSimStatus = "pending" | "running" | "success" | "failed";
@@ -100,6 +101,7 @@ const DEFAULTS: Omit<BatchSimEntry, "id"> = {
   layout_exits: 1,
   layout_parking_spots: 20,
   layout_parking_lot_id: "",
+  layout_parking_lot_name: "",
 };
 
 function makeEntry(): BatchSimEntry {
@@ -113,9 +115,12 @@ export default function BatchSimulationConfig() {
 
   const [phase, setPhase] = useState<"config" | "running" | "results">("config");
   const [batchSims, setBatchSims] = useState<BatchSimState[]>([
-    { entry: makeEntry(), status: "pending" },
   ]);
-
+  // separate init below
+  const [_init] = useState(() => { setBatchSims([{ entry: makeEntry(), status: "pending" }]); return null; });
+  void _init;
+  const [savedIds, setSavedIds] = useState<Set<string>>(new Set());
+  const [savingAll, setSavingAll] = useState(false);
   // ── Validation ────────────────────────────────────────────────────────────
   const simErrors = batchSims.map(s => {
     if (s.entry.max_timesteps < 1) return "Max Timesteps must be ≥ 1";
@@ -134,6 +139,50 @@ export default function BatchSimulationConfig() {
   const deleteSim = (id: string) => {
     if (batchSims.length <= 1) return;
     setBatchSims(prev => prev.filter(s => s.entry.id !== id));
+  };
+
+  const duplicateSim = (id: string) => {
+    if (batchSims.length >= MAX_BATCH) return;
+    setBatchSims(prev => {
+      const idx = prev.findIndex(s => s.entry.id === id);
+      if (idx === -1) return prev;
+      const copy: BatchSimState = { entry: { ...prev[idx].entry, id: crypto.randomUUID() }, status: "pending" };
+      const next = [...prev];
+      next.splice(idx + 1, 0, copy);
+      return next;
+    });
+  };
+
+  const markSaved = (id: string) => setSavedIds(prev => new Set([...prev, id]));
+
+  const saveAll = async () => {
+    if (savingAll) return;
+    setSavingAll(true);
+    const toSave = batchSims
+      .map((s, i) => ({ sim: s, idx: i }))
+      .filter(({ sim }) => sim.status === "success" && !savedIds.has(sim.entry.id));
+    for (const { sim, idx } of toSave) {
+      try {
+        const res = await fetch(`${API_URL}/simulation/headless/save`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            name: (() => {
+              const ln = sim.entry.layout_source === "load"
+                ? (sim.entry.layout_parking_lot_name || "Saved Lot")
+                : `${sim.entry.layout_width}\u00d7${sim.entry.layout_height} Grid`;
+              const d = new Date();
+              const ts = d.toLocaleString("en-GB", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" });
+              return `${ln} \u2013 ${sim.entry.algorithm} \u2013 Batch ${idx + 1} (${ts})`;
+            })(),
+            result: sim.result,
+            config_json: JSON.stringify(sim.entry),
+          }),
+        });
+        if (res.ok) markSaved(sim.entry.id);
+      } catch { /* skip individual failures */ }
+    }
+    setSavingAll(false);
   };
 
   const updateEntry = (id: string, field: keyof Omit<BatchSimEntry, "id">, value: string | number) => {
@@ -233,8 +282,10 @@ export default function BatchSimulationConfig() {
               entry={sim.entry}
               error={simErrors[idx]}
               canDelete={batchSims.length > 1}
+              canDuplicate={batchSims.length < MAX_BATCH}
               onChange={(field, value) => updateEntry(sim.entry.id, field, value)}
               onDelete={() => deleteSim(sim.entry.id)}
+              onDuplicate={() => duplicateSim(sim.entry.id)}
             />
           ))}
 
@@ -331,8 +382,26 @@ export default function BatchSimulationConfig() {
           </section>
 
           {/* Per-simulation result cards */}
+          {/* Save All */}
+          {batchSims.some(s => s.status === "success" && !savedIds.has(s.entry.id)) && (
+            <div className="batchSaveAllRow">
+              <button className="batchSaveAllBtn" onClick={saveAll} disabled={savingAll}>
+                {savingAll
+                  ? <><Loader2 size={15} className="batchSpinner" style={{ marginRight: 7 }} />Saving…</>
+                  : <><Save size={15} style={{ marginRight: 7 }} />Save All Results</>
+                }
+              </button>
+            </div>
+          )}
+
           {batchSims.map((sim, idx) => (
-            <SimResultCard key={sim.entry.id} index={idx} sim={sim} />
+            <SimResultCard
+              key={sim.entry.id}
+              index={idx}
+              sim={sim}
+              isSaved={savedIds.has(sim.entry.id)}
+              onSaved={() => markSaved(sim.entry.id)}
+            />
           ))}
         </div>
       )}
@@ -343,17 +412,33 @@ export default function BatchSimulationConfig() {
 // ─── Sub-components ───────────────────────────────────────────────────────────
 
 function SimBlock({
-  index, entry, error, canDelete, onChange, onDelete,
+  index, entry, error, canDelete, canDuplicate, onChange, onDelete, onDuplicate,
 }: {
   index: number;
   entry: BatchSimEntry;
   error: string | null;
   canDelete: boolean;
+  canDuplicate: boolean;
   onChange: (field: keyof Omit<BatchSimEntry, "id">, value: string | number) => void;
   onDelete: () => void;
+  onDuplicate: () => void;
 }) {
+  const [showPicker, setShowPicker] = useState(false);
+
   return (
     <section className="setupCard batchSimBlock">
+      {showPicker && (
+        <LayoutPickerModal
+          onSelect={(id, name, entries, exits, spots) => {
+            onChange("layout_parking_lot_id", id);
+            onChange("layout_parking_lot_name", name);
+            onChange("layout_entries", entries);
+            onChange("layout_exits", exits);
+            onChange("layout_parking_spots", spots);
+          }}
+          onClose={() => setShowPicker(false)}
+        />
+      )}
       {/* Block header */}
       <div className="batchBlockHeader">
         <div className="cardHead" style={{ marginBottom: 0 }}>
@@ -362,14 +447,24 @@ function SimBlock({
             Simulation {index + 1}
           </h2>
         </div>
-        <button
-          className="batchDeleteBtn"
-          onClick={onDelete}
-          disabled={!canDelete}
-          title={canDelete ? "Delete this simulation" : "Cannot delete the last simulation"}
-        >
-          <Trash2 size={15} />
-        </button>
+        <div className="batchBlockActions">
+          <button
+            className="batchDuplicateBtn"
+            onClick={onDuplicate}
+            disabled={!canDuplicate}
+            title={canDuplicate ? "Duplicate this simulation" : "Batch limit reached"}
+          >
+            <Copy size={14} />
+          </button>
+          <button
+            className="batchDeleteBtn"
+            onClick={onDelete}
+            disabled={!canDelete}
+            title={canDelete ? "Delete this simulation" : "Cannot delete the last simulation"}
+          >
+            <Trash2 size={15} />
+          </button>
+        </div>
       </div>
 
       {/* ── Parking Lot ── */}
@@ -399,15 +494,20 @@ function SimBlock({
           </div>
         )}
         {entry.layout_source === "load" && (
-          <div className="fieldRow">
-            <input
-              className="numInput"
-              style={{ width: "100%", maxWidth: 280 }}
-              type="text"
-              placeholder="Parking Lot ID"
-              value={entry.layout_parking_lot_id}
-              onChange={e => onChange("layout_parking_lot_id", e.target.value)}
-            />
+          <div className="batchLayoutPickerRow">
+            {entry.layout_parking_lot_id ? (
+              <div className="batchLayoutSelected">
+                <span className="batchLayoutSelectedName">{entry.layout_parking_lot_name || entry.layout_parking_lot_id}</span>
+                <button className="batchLayoutChangeBtn" onClick={() => setShowPicker(true)}>
+                  <FolderOpen size={13} style={{ marginRight: 5 }} />Change
+                </button>
+              </div>
+            ) : (
+              <button className="batchLayoutChooseBtn" onClick={() => setShowPicker(true)}>
+                <FolderOpen size={15} style={{ marginRight: 8 }} />
+                Choose a Saved Layout…
+              </button>
+            )}
           </div>
         )}
       </div>
@@ -559,13 +659,24 @@ function BatchNum({ label, value, min, max, onChange }: {
   );
 }
 
-function SimResultCard({ index, sim }: { index: number; sim: BatchSimState }) {
+function SimResultCard({ index, sim, isSaved, onSaved }: {
+  index: number;
+  sim: BatchSimState;
+  isSaved: boolean;
+  onSaved: () => void;
+}) {
   const r = sim.result;
   const algoLabel = ALGO_OPTIONS.find(a => a.value === sim.entry.algorithm)?.label ?? sim.entry.algorithm;
+  const layoutName = sim.entry.layout_source === "load"
+    ? (sim.entry.layout_parking_lot_name || "Saved Lot")
+    : `${sim.entry.layout_width}\u00d7${sim.entry.layout_height} Grid`;
   const [showSaveInput, setShowSaveInput] = useState(false);
-  const [saveName, setSaveName] = useState(`Simulation ${index + 1}`);
+  const [saveName, setSaveName] = useState(() => {
+    const d = new Date();
+    const ts = d.toLocaleString("en-GB", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" });
+    return `${layoutName} \u2013 ${algoLabel} \u2013 ${ts}`;
+  });
   const [saving, setSaving] = useState(false);
-  const [saved, setSaved] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
 
   const handleSave = async () => {
@@ -585,7 +696,7 @@ function SimResultCard({ index, sim }: { index: number; sim: BatchSimState }) {
         const txt = await res.text();
         throw new Error(`HTTP ${res.status}: ${txt}`);
       }
-      setSaved(true);
+      onSaved();
       setShowSaveInput(false);
     } catch (err) {
       setSaveError(err instanceof Error ? err.message : String(err));
@@ -653,7 +764,7 @@ function SimResultCard({ index, sim }: { index: number; sim: BatchSimState }) {
       {/* Save */}
       {sim.status === "success" && r && (
         <div className="batchSaveRow">
-          {saved ? (
+          {isSaved ? (
             <span className="batchSavedBadge">
               <CheckCircle2 size={14} style={{ marginRight: 5 }} />
               Saved to history
@@ -695,6 +806,84 @@ function StatCard({ title, val, sub }: { title: string; val: string | number; su
       <div className="batchStatTitle">{title}</div>
       <div className="batchStatVal">{val}</div>
       <div className="batchStatSub">{sub}</div>
+    </div>
+  );
+}
+
+// ─── Layout Picker Modal ──────────────────────────────────────────────────────
+
+type PickerLayout = { id: string; name: string; entries: number; exits: number; spots: number; size: string; note: string; };
+
+function LayoutPickerModal({ onSelect, onClose }: {
+  onSelect: (id: string, name: string, entries: number, exits: number, spots: number) => void;
+  onClose: () => void;
+}) {
+  const [layouts, setLayouts] = useState<PickerLayout[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [fetchError, setFetchError] = useState<string | null>(null);
+  const [q, setQ] = useState("");
+
+  useEffect(() => {
+    fetch(`${API_URL}/editor/saved`)
+      .then(r => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return r.json();
+      })
+      .then(data => {
+        setLayouts((data.items || []).map((item: Record<string, unknown>) => ({
+          id: item.id as string,
+          name: (item.name as string) || "Untitled Layout",
+          entries: (item.num_entries as number) || 0,
+          exits: (item.num_exits as number) || 0,
+          spots: (item.capacity as number) || 0,
+          size: `${item.width}\u00d7${item.height}`,
+          note: `Entries: ${item.num_entries}, Exits: ${item.num_exits}`,
+        })));
+      })
+      .catch(e => setFetchError(e instanceof Error ? e.message : String(e)))
+      .finally(() => setLoading(false));
+  }, []);
+
+  const filtered = useMemo(() => {
+    const s = q.trim().toLowerCase();
+    return s ? layouts.filter(l => l.name.toLowerCase().includes(s)) : layouts;
+  }, [q, layouts]);
+
+  return (
+    <div className="batchPickerOverlay" onClick={onClose}>
+      <div className="batchPickerBox" onClick={e => e.stopPropagation()}>
+        <div className="batchPickerHeader">
+          <span className="batchPickerTitle">Choose a Saved Layout</span>
+          <button className="batchPickerClose" onClick={onClose}><X size={18} /></button>
+        </div>
+        <div className="batchPickerSearch">
+          <FolderOpen size={15} className="batchPickerSearchIcon" />
+          <input
+            className="batchPickerSearchInput"
+            placeholder="Search layouts…"
+            value={q}
+            onChange={e => setQ(e.target.value)}
+            autoFocus
+          />
+        </div>
+        <div className="batchPickerList">
+          {loading && <div className="batchPickerState">Loading layouts…</div>}
+          {fetchError && <div className="batchPickerState batchPickerState--error">Error: {fetchError}</div>}
+          {!loading && !fetchError && filtered.length === 0 && (
+            <div className="batchPickerState">No layouts found.</div>
+          )}
+          {!loading && filtered.map(l => (
+            <button
+              key={l.id}
+              className="batchPickerCard"
+              onClick={() => { onSelect(l.id, l.name, l.entries, l.exits, l.spots); onClose(); }}
+            >
+              <div className="batchPickerCardName">{l.name}</div>
+              <div className="batchPickerCardMeta">{l.size} · {l.spots} spots · {l.note}</div>
+            </button>
+          ))}
+        </div>
+      </div>
     </div>
   );
 }

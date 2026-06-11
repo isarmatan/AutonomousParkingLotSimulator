@@ -31,6 +31,8 @@ type SimHistoryItem = {
   average_steps_to_exit?: number;
 
   algorithm?: string;
+  config_json?: string;
+  total_exited?: number;
   avg_trip_duration_steps?: number;
   max_trip_duration_steps?: number;
   min_trip_duration_steps?: number;
@@ -84,48 +86,11 @@ export default function Stats() {
 
   const handleExport = async (item: SimHistoryItem) => {
     try {
-      // Create CSV content from simulation data
-      const csvHeaders = [
-        'Simulation ID','Name','Created At','Status','Algorithm',
-        'Grid Width','Grid Height',
-        'Initial Active Cars Configured','Max Arriving Cars Configured',
-        'Total Steps','Total Cars','Total Parked','Total Failed Plans',
-        'Initial Active Cars Exited','Arriving Cars Spawned','Arriving Cars Parked',
-        'Average Steps to Park','Average Steps to Exit',
-        'Avg Trip Duration (steps)','Max Trip Duration','Min Trip Duration','Completed Trips',
-        'Avg Planner ms','Max Planner ms','Planner Calls',
-        'CPU Avg %','CPU Peak %','Memory Avg MB','Memory Peak MB'
-      ];
-
-      const csvData = [
-        item.id,item.name||'Untitled',item.created_at,item.status,item.algorithm||'',
-        item.grid_width||'',item.grid_height||'',
-        item.initial_active_cars_configured,item.max_arriving_cars_configured,
-        item.total_steps,item.total_cars,item.total_parked,item.total_failed_plans,
-        item.initial_active_cars_exited,item.arriving_cars_spawned||'',item.arriving_cars_parked,
-        item.average_steps_to_park??'',item.average_steps_to_exit??'',
-        item.avg_trip_duration_steps??'',item.max_trip_duration_steps??'',
-        item.min_trip_duration_steps??'',item.total_completed_trips??'',
-        item.avg_planner_ms??'',item.max_planner_ms??'',item.planner_call_count??'',
-        item.cpu_usage_avg_percent??'',item.cpu_usage_peak_percent??'',
-        item.memory_usage_avg_mb??'',item.memory_usage_peak_mb??''
-      ];
-
-      // Convert to CSV format
-      const csvContent = [
-        csvHeaders.join(','),
-        csvData.map(field => `"${field}"`).join(',')
-      ].join('\n');
-
-      // Create and download the file
+      const csvContent = [CSV_HEADERS.join(','), buildCsvRow(item)].join('\n');
       const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
       const link = document.createElement('a');
-      const url = URL.createObjectURL(blob);
-      
-      const fileName = `simulation_${item.name || 'unnamed'}_${item.id.slice(0, 8)}.csv`;
-      
-      link.setAttribute('href', url);
-      link.setAttribute('download', fileName);
+      link.href = URL.createObjectURL(blob);
+      link.download = `simulation_${(item.name || 'unnamed').replace(/[^a-z0-9]/gi,'_')}_${item.id.slice(0,8)}.csv`;
       link.style.visibility = 'hidden';
       document.body.appendChild(link);
       link.click();
@@ -198,50 +163,12 @@ export default function Stats() {
 
   const handleBulkExport = () => {
     if (selectedItems.size === 0) return;
-    
     const selectedData = items.filter(item => selectedItems.has(item.id));
-    
-    // Create CSV content for multiple simulations
-    const csvHeaders = [
-      'Simulation ID','Name','Created At','Status','Algorithm',
-      'Grid Width','Grid Height',
-      'Initial Active Cars Configured','Max Arriving Cars Configured',
-      'Total Steps','Total Cars','Total Parked','Total Failed Plans',
-      'Initial Active Cars Exited','Arriving Cars Spawned','Arriving Cars Parked',
-      'Average Steps to Park','Average Steps to Exit',
-      'Avg Trip Duration (steps)','Max Trip Duration','Min Trip Duration','Completed Trips',
-      'Avg Planner ms','Max Planner ms','Planner Calls',
-      'CPU Avg %','CPU Peak %','Memory Avg MB','Memory Peak MB'
-    ];
-
-    const csvRows = selectedData.map(item => {
-      const csvData = [
-        item.id,item.name||'Untitled',item.created_at,item.status,item.algorithm||'',
-        item.grid_width||'',item.grid_height||'',
-        item.initial_active_cars_configured,item.max_arriving_cars_configured,
-        item.total_steps,item.total_cars,item.total_parked,item.total_failed_plans,
-        item.initial_active_cars_exited,item.arriving_cars_spawned||'',item.arriving_cars_parked,
-        item.average_steps_to_park??'',item.average_steps_to_exit??'',
-        item.avg_trip_duration_steps??'',item.max_trip_duration_steps??'',
-        item.min_trip_duration_steps??'',item.total_completed_trips??'',
-        item.avg_planner_ms??'',item.max_planner_ms??'',item.planner_call_count??'',
-        item.cpu_usage_avg_percent??'',item.cpu_usage_peak_percent??'',
-        item.memory_usage_avg_mb??'',item.memory_usage_peak_mb??''
-      ];
-      return csvData.map(field => `"${field}"`).join(',');
-    });
-
-    const csvContent = [csvHeaders.join(','), ...csvRows].join('\n');
-
-    // Create and download the file
+    const csvContent = [CSV_HEADERS.join(','), ...selectedData.map(buildCsvRow)].join('\n');
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const link = document.createElement('a');
-    const url = URL.createObjectURL(blob);
-    
-    const fileName = `simulations_bulk_export_${new Date().toISOString().slice(0, 10)}.csv`;
-    
-    link.setAttribute('href', url);
-    link.setAttribute('download', fileName);
+    link.href = URL.createObjectURL(blob);
+    link.download = `simulations_bulk_${new Date().toISOString().slice(0,10)}.csv`;
     link.style.visibility = 'hidden';
     document.body.appendChild(link);
     link.click();
@@ -525,4 +452,99 @@ export default function Stats() {
 function avg(nums: number[]) {
   if (!nums.length) return NaN;
   return nums.reduce((a, b) => a + b, 0) / nums.length;
+}
+
+// ─── CSV export helpers ───────────────────────────────────────────────────────
+
+const CSV_HEADERS = [
+  // Identification
+  "Simulation ID", "Simulation Name", "Created At", "Status", "Algorithm",
+  // Parking lot
+  "Parking Lot ID", "Parking Lot Name",
+  "Grid Width", "Grid Height",
+  "Entries", "Exits", "Parking Spots",
+  // Input configuration (from config_json)
+  "Initial Cars", "Max Arriving Cars", "Max Timesteps",
+  "Arrival Rate (λ)", "Exit Rate",
+  "Planning Horizon", "Goal Reserve Horizon",
+  // Output statistics
+  "Completed Steps", "Total Failed Plans",
+  "Total Exited",
+  "Arriving Cars Spawned", "Arriving Cars Parked",
+  "Avg Steps to Park", "Avg Steps to Exit",
+  // Trip stats
+  "Avg Trip Duration (steps)", "Max Trip Duration", "Min Trip Duration", "Completed Trips",
+  // Planner / system performance
+  "Avg Planner ms", "Max Planner ms", "Planner Calls",
+  "CPU Avg %", "CPU Peak %", "Memory Avg MB", "Memory Peak MB",
+];
+
+function parseConfig(json?: string | null): Record<string, unknown> {
+  if (!json) return {};
+  try { return JSON.parse(json) as Record<string, unknown>; }
+  catch { return {}; }
+}
+
+function cfgGet(cfg: Record<string, unknown>, ...keys: string[]): string {
+  for (const k of keys) {
+    const parts = k.split(".");
+    let val: unknown = cfg;
+    for (const p of parts) {
+      val = val && typeof val === "object" ? (val as Record<string, unknown>)[p] : undefined;
+    }
+    if (val !== undefined && val !== null && val !== "") return String(val);
+  }
+  return "";
+}
+
+const csvEsc = (v: unknown) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+
+function buildCsvRow(item: SimHistoryItem): string {
+  const cfg = parseConfig(item.config_json);
+  const vals = [
+    // Identification
+    item.id,
+    item.name || "Untitled",
+    item.created_at,
+    item.status,
+    item.algorithm || "",
+    // Parking lot
+    item.parking_lot_id || "",
+    cfgGet(cfg, "layout_parking_lot_name"),
+    item.grid_width ?? "",
+    item.grid_height ?? "",
+    cfgGet(cfg, "rules.num_entries", "layout_entries"),
+    cfgGet(cfg, "rules.num_exits", "layout_exits"),
+    cfgGet(cfg, "rules.num_parking_spots", "layout_parking_spots"),
+    // Input config
+    cfgGet(cfg, "initial_cars"),
+    cfgGet(cfg, "max_arriving_cars"),
+    cfgGet(cfg, "max_steps", "max_timesteps"),
+    cfgGet(cfg, "arrival_lambda"),
+    cfgGet(cfg, "exit_rate"),
+    cfgGet(cfg, "planning_horizon"),
+    cfgGet(cfg, "goal_reserve_horizon"),
+    // Output stats
+    item.total_steps,
+    item.total_failed_plans,
+    item.total_exited ?? "",
+    item.arriving_cars_spawned ?? "",
+    item.arriving_cars_parked,
+    item.average_steps_to_park != null ? item.average_steps_to_park.toFixed(2) : "",
+    item.average_steps_to_exit != null ? item.average_steps_to_exit.toFixed(2) : "",
+    // Trip stats
+    item.avg_trip_duration_steps != null ? item.avg_trip_duration_steps.toFixed(2) : "",
+    item.max_trip_duration_steps ?? "",
+    item.min_trip_duration_steps ?? "",
+    item.total_completed_trips ?? "",
+    // Perf
+    item.avg_planner_ms != null ? item.avg_planner_ms.toFixed(3) : "",
+    item.max_planner_ms != null ? item.max_planner_ms.toFixed(3) : "",
+    item.planner_call_count ?? "",
+    item.cpu_usage_avg_percent ?? "",
+    item.cpu_usage_peak_percent ?? "",
+    item.memory_usage_avg_mb ?? "",
+    item.memory_usage_peak_mb ?? "",
+  ];
+  return vals.map(csvEsc).join(",");
 }

@@ -61,7 +61,8 @@ export default function SavedLayouts() {
     return layouts.filter((l) => l.name.toLowerCase().includes(s));
   }, [q, layouts]);
 
-  const onOpen = (id: string) => {
+  const onOpen = (id: string, name: string) => {
+    sessionStorage.setItem("sim_lot_name", name);
     navigate(`/layout?layout=${encodeURIComponent(id)}`);
   };
 
@@ -117,7 +118,7 @@ export default function SavedLayouts() {
           {!loading && !error && (
             <div className="layoutsGrid">
               {filtered.map((l) => (
-                <button key={l.id} className="layoutCard" onClick={() => onOpen(l.id)}>
+                <button key={l.id} className="layoutCard" onClick={() => onOpen(l.id, l.name)}>
                   <div className="layoutCardHead">
                     <div className="layoutName">{l.name}</div>
                     <div className="layoutActions">

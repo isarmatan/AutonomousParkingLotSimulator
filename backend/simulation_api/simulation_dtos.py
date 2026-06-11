@@ -123,6 +123,7 @@ class SimulationHistoryItemDTO(BaseModel):
     memory_usage_avg_mb: Optional[float] = None
     memory_usage_peak_mb: Optional[float] = None
     machine_specs_json: Optional[str] = None
+    config_json: Optional[str] = None
 
 class SnapshotRequest(BaseModel):
     name: str = "Untitled"

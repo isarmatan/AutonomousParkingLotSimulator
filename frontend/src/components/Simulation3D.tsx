@@ -32,7 +32,19 @@ interface Simulation3DProps {
   stepProgress: number;
 }
 
-const CELL_SIZE = 2; 
+const CELL_SIZE = 2;
+
+const CAR_PALETTE = [
+  "#f97316", "#eab308", "#22c55e", "#06b6d4", "#8b5cf6",
+  "#ec4899", "#ef4444", "#14b8a6", "#a855f7", "#f59e0b",
+  "#84cc16", "#38bdf8",
+];
+
+function carColor(id: string): string {
+  let h = 0;
+  for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) & 0xffff;
+  return CAR_PALETTE[h % CAR_PALETTE.length];
+}
 
 // --- Asset Components (Reused from Scene3D) ---
 
@@ -290,8 +302,7 @@ function SceneContent({ grid, timesteps, currentStepIndex, stepProgress }: { gri
             carRotations.current[id] = rotation;
         }
 
-        // Determine Color (is_initial is the 3rd element of the car tuple)
-        const color = (currentStep.cars[id][2] === 1) ? "red" : "yellow";
+        const color = carColor(id);
 
         return <Car key={id} id={id} x={interpX} y={interpY} rotation={rotation} color={color} />;
       })}

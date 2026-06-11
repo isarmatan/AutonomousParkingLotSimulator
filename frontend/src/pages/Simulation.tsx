@@ -183,6 +183,17 @@ export default function Simulation() {
   const [simAlgorithm, setSimAlgorithm] = useState<string | null>(null);
   const [simInitialCars, setSimInitialCars] = useState(0);
 
+  const buildSmartSaveName = (algo?: string | null, label?: string) => {
+    const d = new Date();
+    const ts = d.toLocaleString("en-GB", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" });
+    const a = algo || simAlgorithm || "sim";
+    if (layoutId === "new") {
+      return `Generated – ${a} – ${ts}`;
+    }
+    const lotName = sessionStorage.getItem("sim_lot_name") || "Saved Lot";
+    return label ? `${lotName} – ${label} – ${ts}` : `${lotName} – ${a} – ${ts}`;
+  };
+
   // ---- Refs ----
   const wsRef           = useRef<WebSocket | null>(null);
   const liveCarsRef     = useRef<Record<string, [number, number, number]>>({});
@@ -633,7 +644,7 @@ export default function Simulation() {
             )}
 
             {(canSave || canSaveHeadless) && (
-              <button className="btnSave" onClick={() => { setSaveName(""); setSaveModalOpen(true); }}>
+              <button className="btnSave" onClick={() => { setSaveName(buildSmartSaveName()); setSaveModalOpen(true); }}>
                 Save Run
               </button>
             )}
@@ -715,7 +726,7 @@ export default function Simulation() {
                     </div>
                     <button
                       className="btnSave comparisonSideSave"
-                      onClick={() => { setPendingHeadlessSave(result); setSaveName(""); setSaveModalOpen(true); }}
+                      onClick={() => { setPendingHeadlessSave(result); setSaveName(buildSmartSaveName(result.algorithm, result.algorithm.toUpperCase())); setSaveModalOpen(true); }}
                     >
                       Save {result.algorithm.toUpperCase()}
                     </button>
@@ -963,8 +974,7 @@ export default function Simulation() {
                   )}
                 </div>
               )}
-              {viewMode === "2D" && (
-                <div className="simEventLog" ref={logRef} onScroll={handleLogScroll}>
+              <div className="simEventLog" ref={logRef} onScroll={handleLogScroll}>
                   <div className="simEventLogHeader">
                     <span className="simEventLogTitle">Event Log</span>
                     <span className="simEventLogBadge">{logEvents.length}</span>
@@ -977,7 +987,6 @@ export default function Simulation() {
                     </div>
                   ))}
                 </div>
-              )}
             </div>
           )}
         </div>

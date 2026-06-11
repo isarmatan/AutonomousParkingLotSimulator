@@ -245,6 +245,23 @@ def save_session_snapshot(
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
     snap = session.build_snapshot(name=req.name)
+
+    # Enrich config_json with parking lot details when loaded from a saved lot
+    if session.parking_lot_id and snap.get("config_json"):
+        try:
+            cfg = json.loads(snap["config_json"])
+            lot_repo = ParkingLotRepository(db)
+            lot = lot_repo.get(session.parking_lot_id)
+            if lot:
+                cells = json.loads(lot.grid_json).get("cells", [])
+                cfg["layout_parking_lot_name"] = lot.name
+                cfg["layout_entries"]      = sum(1 for c in cells if c.get("type") == "ENTRY")
+                cfg["layout_exits"]        = sum(1 for c in cells if c.get("type") == "EXIT")
+                cfg["layout_parking_spots"] = sum(1 for c in cells if c.get("type") == "PARKING")
+                snap["config_json"] = json.dumps(cfg)
+        except Exception:
+            pass
+
     repo = SimulationRepository(db)
     return repo.save_snapshot(snap)
 
