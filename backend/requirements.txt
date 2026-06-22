@@ -1,0 +1,8 @@
+fastapi==0.138.0
+psutil==7.2.2
+pydantic==2.13.4
+pytest==9.1.1
+SQLAlchemy==2.0.36
+uvicorn==0.49.0
+fastapi==0.138.0
+psutil==7.2.2
