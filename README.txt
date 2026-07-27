@@ -12,7 +12,7 @@ OPEN CMD
 git clone -b fixed_version_11th_june --single-branch https://github.com/isarmatan/AutonomousParkingLotSimulator.git 
 cd AutonomousParkingLotSimulator\backend
 python -m venv .venv
-.venv\Scripts\activate.bat
+.\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip setuptools wheel
 pip install -r requirements.txt
 uvicorn api_app:app --reload
