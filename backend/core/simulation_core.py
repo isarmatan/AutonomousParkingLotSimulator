@@ -308,7 +308,7 @@ class SimulationCore:
                     self.parking_manager.release_assigned_spot(car.car_id)
                     car.intent = "EXIT"
                     car.goal = self.parking_manager.assign_goal(car, self.time)
-                    self._emit_event(car_id, "intent_park_to_exit", f"Car {car_id} has changed its intent from parking to exiting")
+                    self._emit_event(car.car_id, "intent_park_to_exit", f"Car {car.car_id} has changed its intent from parking to exiting")
             else:
                 car.plan_fail_count = 0
                 _replanned_count += 1
